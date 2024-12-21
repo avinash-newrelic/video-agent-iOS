@@ -74,7 +74,7 @@
     
     [self.timeSinceTable applyAttributes:action attributes:attr];
     
-    AV_LOG(@"SEND EVENT %@ => %@", action, attr);
+    AV_LOG(@"EVENT TYPE => %@ SEND EVENT %@ => %@",eventType, action, attr);
     
     [attr setObject:[self getAgentSession] forKey:@"agentSession"];
     [attr setObject:@"newrelic" forKey:@"instrumentation.provider"];
