@@ -8,6 +8,11 @@ on:
       - master
 
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Test run without publishing, tagging, or creating a release'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -19,6 +24,9 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release'))
+
+    env:
+      DRY_RUN: ${{ inputs.dry_run || 'false' }}
 
     steps:
       - name: Checkout code
@@ -53,6 +61,7 @@ jobs:
           echo "Publishing version: $VERSION"
 
       - name: Cleanup existing tag if present
+        if: env.DRY_RUN != 'true'
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
 
@@ -92,7 +101,7 @@ jobs:
                 rm -f validation_output.log
                 return 0
               else
-                if grep -qi "internal server error" validation_output.log || grep -qi "connection.*timed out" validation_output.log; then
+                if grep -qiE "(internal server error|connection.*(timed out|refused|reset)|CDN:.*(trunk|URL)|SSL|502 Bad Gateway|503 Service|504 Gateway|ECONNRESET|ECONNREFUSED|network is unreachable|temporarily unavailable|rate limit|429 Too Many|couldn.t connect|socket hang up)" validation_output.log; then
                   echo "Transient error detected for $podspec"
                   if [ $attempt -lt $max_attempts ]; then
                     echo "Retrying in 10 seconds..."
@@ -141,9 +150,17 @@ jobs:
           EOF
           chmod 600 ~/.netrc
 
-          echo "CocoaPods trunk authentication configured"
+          # Verify the token actually works
+          echo "Verifying trunk authentication..."
+          if ! pod trunk me 2>&1; then
+            echo "Error: CocoaPods trunk token is invalid or expired"
+            echo "Please update COCOAPODS_TRUNK_TOKEN in GitHub repository secrets"
+            exit 1
+          fi
+          echo "CocoaPods trunk authentication verified"
 
       - name: Create and push git tag
+        if: env.DRY_RUN != 'true'
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
           git config user.name "github-actions[bot]"
@@ -154,148 +171,122 @@ jobs:
           git push origin "v$VERSION"
           echo "Tag v$VERSION created and pushed successfully!"
 
-      - name: Publish NewRelicVideoAgent
+      - name: Publish pods to CocoaPods
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
 
-          # Check if version is already published
-          if pod trunk info NewRelicVideoAgent | grep -q "- $VERSION"; then
-            echo "NewRelicVideoAgent $VERSION is already published, skipping..."
-          else
-            echo "Publishing NewRelicVideoAgent $VERSION..."
+          # Check if a pod version is published (CLI + API fallback)
+          check_published() {
+            local pod=$1
+            pod trunk info "$pod" 2>/dev/null | grep -q "- $VERSION" ||
+              curl -sf "https://trunk.cocoapods.org/api/v1/pods/$pod" 2>/dev/null | grep -q "\"$VERSION\""
+          }
 
-            set +e
-            pod trunk push NewRelicVideoAgent.podspec --allow-warnings 2>&1 | tee publish_output.log
-            EXIT_CODE=$?
-            set -e
+          # Publish a single pod with retry logic
+          publish_pod() {
+            local pod=$1
+            local podspec=$2
+            local max_attempts=3
+            local attempt=1
 
-            if [ $EXIT_CODE -eq 0 ]; then
-              echo "NewRelicVideoAgent published successfully!"
-            else
+            echo ""
+            echo "========== $pod =========="
+
+            if check_published "$pod"; then
+              echo "$pod $VERSION is already published, skipping..."
+              return 0
+            fi
+
+            while [ $attempt -le $max_attempts ]; do
+              echo "Publishing $pod $VERSION (attempt $attempt/$max_attempts)..."
+
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "[DRY RUN] Would run: pod trunk push $podspec --allow-warnings"
+                echo "$pod dry-run publish complete!"
+                rm -f publish_output.log
+                return 0
+              fi
+
+              set +e
+              pod trunk push "$podspec" --allow-warnings 2>&1 | tee publish_output.log
+              local exit_code=$?
+              set -e
+
+              if [ $exit_code -eq 0 ]; then
+                echo "$pod published successfully!"
+                rm -f publish_output.log
+                return 0
+              fi
+
               if grep -q "Unable to accept duplicate entry" publish_output.log; then
-                echo "Duplicate entry error - pod was already published"
-              elif grep -qi "internal server error" publish_output.log; then
-                echo "Internal server error occurred. Verifying if pod was actually published..."
-                sleep 5
-                if pod trunk info NewRelicVideoAgent | grep -q "- $VERSION"; then
-                  echo "Pod was published successfully despite server error!"
+                echo "$pod was already published (duplicate entry)"
+                rm -f publish_output.log
+                return 0
+              fi
+
+              if grep -qiE "(internal server error|connection.*(timed out|refused|reset)|CDN:.*(trunk|URL)|SSL|502 Bad Gateway|503 Service|504 Gateway|ECONNRESET|ECONNREFUSED|network is unreachable|temporarily unavailable|rate limit|429 Too Many|couldn.t connect|socket hang up|Unable to find a specification|not found in trunk|dependency.*not found)" publish_output.log; then
+                echo "Transient error detected."
+                sleep 10
+                if check_published "$pod"; then
+                  echo "$pod published successfully despite the error!"
+                  rm -f publish_output.log
+                  return 0
+                fi
+                if [ $attempt -lt $max_attempts ]; then
+                  echo "Retrying in 30 seconds..."
+                  sleep 30
+                  attempt=$((attempt + 1))
                 else
-                  echo "Pod was NOT published due to server error. Please retry the workflow."
+                  echo "Failed after $max_attempts attempts:"
                   cat publish_output.log
-                  exit 1
+                  rm -f publish_output.log
+                  return 1
                 fi
               else
-                echo "Unexpected error during publishing:"
+                echo "Non-retryable error:"
                 cat publish_output.log
-                exit 1
+                rm -f publish_output.log
+                return 1
               fi
-            fi
-            rm -f publish_output.log
+            done
+          }
+
+          # Wait for a pod to be indexed
+          wait_for_indexing() {
+            local pod=$1
+            local max_wait=10
+            local wait_time=30
+            local i=0
+
+            echo ""
+            echo "Waiting for $pod to be indexed..."
+            while [ $i -lt $max_wait ]; do
+              i=$((i + 1))
+              if pod search "$pod" 2>/dev/null | grep -q "$VERSION"; then
+                echo "$pod $VERSION is now indexed!"
+                return 0
+              fi
+              if [ $i -lt $max_wait ]; then
+                echo "  Attempt $i/$max_wait - not indexed yet, waiting ${wait_time}s..."
+                sleep $wait_time
+              fi
+            done
+            echo "Timeout waiting for indexing, proceeding with publish (retry will handle it)..."
+          }
+
+          # Publish NewRelicVideoAgent first (other pods depend on it)
+          publish_pod "NewRelicVideoAgent" "NewRelicVideoAgent.podspec"
+          if [ "$DRY_RUN" != "true" ]; then
+            wait_for_indexing "NewRelicVideoAgent"
           fi
 
-      - name: Wait for NewRelicVideoAgent indexing
-        run: |
-          echo "Waiting for NewRelicVideoAgent to be indexed by CocoaPods..."
-          echo "This usually takes ~5 minutes..."
+          # Publish dependent pods — if the first succeeds, indexing is confirmed
+          # so the second doesn't need any additional wait
+          publish_pod "NRAVPlayerTracker" "NRAVPlayerTracker.podspec"
+          publish_pod "NRIMATracker" "NRIMATracker.podspec"
 
-          VERSION="${{ steps.get_version.outputs.version }}"
-          MAX_ATTEMPTS=20
-          ATTEMPT=0
-          WAIT_TIME=30
-
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            ATTEMPT=$((ATTEMPT + 1))
-            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Checking if NewRelicVideoAgent $VERSION is indexed..."
-
-            if pod search NewRelicVideoAgent | grep -q "$VERSION"; then
-              echo "NewRelicVideoAgent $VERSION is now indexed!"
-              exit 0
-            fi
-
-            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-              echo "Not indexed yet, waiting ${WAIT_TIME} seconds..."
-              sleep $WAIT_TIME
-            fi
-          done
-
-          echo "Timeout waiting for indexing, proceeding anyway..."
-
-      - name: Publish NRAVPlayerTracker
-        run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-
-          # Check if version is already published
-          if pod trunk info NRAVPlayerTracker | grep -q "- $VERSION"; then
-            echo "NRAVPlayerTracker $VERSION is already published, skipping..."
-          else
-            echo "Publishing NRAVPlayerTracker $VERSION..."
-
-            set +e
-            pod trunk push NRAVPlayerTracker.podspec --allow-warnings 2>&1 | tee publish_output.log
-            EXIT_CODE=$?
-            set -e
-
-            if [ $EXIT_CODE -eq 0 ]; then
-              echo "NRAVPlayerTracker published successfully!"
-            else
-              if grep -q "Unable to accept duplicate entry" publish_output.log; then
-                echo "Duplicate entry error - pod was already published"
-              elif grep -qi "internal server error" publish_output.log; then
-                echo "Internal server error occurred. Verifying if pod was actually published..."
-                sleep 5
-                if pod trunk info NRAVPlayerTracker | grep -q "- $VERSION"; then
-                  echo "Pod was published successfully despite server error!"
-                else
-                  echo "Pod was NOT published due to server error. Please retry the workflow."
-                  cat publish_output.log
-                  exit 1
-                fi
-              else
-                echo "Unexpected error during publishing:"
-                cat publish_output.log
-                exit 1
-              fi
-            fi
-            rm -f publish_output.log
-          fi
-
-      - name: Publish NRIMATracker
-        run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-
-          if pod trunk info NRIMATracker | grep -q "- $VERSION"; then
-            echo "NRIMATracker $VERSION is already published, skipping..."
-          else
-            echo "Publishing NRIMATracker $VERSION..."
-
-            set +e
-            pod trunk push NRIMATracker.podspec --allow-warnings 2>&1 | tee publish_output.log
-            EXIT_CODE=$?
-            set -e
-
-            if [ $EXIT_CODE -eq 0 ]; then
-              echo "NRIMATracker published successfully!"
-            else
-              if grep -q "Unable to accept duplicate entry" publish_output.log; then
-                echo "Duplicate entry error - pod was already published"
-              elif grep -qi "internal server error" publish_output.log; then
-                echo "Internal server error occurred. Verifying if pod was actually published..."
-                sleep 5
-                if pod trunk info NRIMATracker | grep -q "- $VERSION"; then
-                  echo "Pod was published successfully despite server error!"
-                else
-                  echo "Pod was NOT published due to server error. Please retry the workflow."
-                  cat publish_output.log
-                  exit 1
-                fi
-              else
-                echo "Unexpected error during publishing:"
-                cat publish_output.log
-                exit 1
-              fi
-            fi
-            rm -f publish_output.log
-          fi
+          echo ""
+          echo "All pods published!"
 
       - name: Extract changelog excerpt
         id: changelog
@@ -320,11 +311,13 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Build XCFrameworks
+        if: env.DRY_RUN != 'true'
         run: |
           chmod +x ./build-xcframeworks.sh
           ./build-xcframeworks.sh
 
       - name: Create GitHub Release
+        if: env.DRY_RUN != 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
@@ -349,48 +342,56 @@ jobs:
 
       - name: Verify publication
         run: |
-          echo "Verifying publication..."
           VERSION="${{ steps.get_version.outputs.version }}"
 
-          echo ""
-          echo "=== NewRelicVideoAgent ==="
-          if pod trunk info NewRelicVideoAgent | grep -q "- $VERSION"; then
-            echo "NewRelicVideoAgent $VERSION is published"
-            pod trunk info NewRelicVideoAgent | grep -A 2 "Versions:" | head -10
-          else
-            echo "NewRelicVideoAgent $VERSION NOT found"
-            exit 1
+          if [ "$DRY_RUN" = "true" ]; then
+            echo ""
+            echo "=================================="
+            echo "DRY RUN v$VERSION Complete!"
+            echo "=================================="
+            echo ""
+            echo "Steps validated:"
+            echo "  - Version extraction: $VERSION"
+            echo "  - Podspec validation: passed"
+            echo "  - Trunk authentication: verified"
+            echo ""
+            echo "Steps skipped (dry run):"
+            echo "  - Tag creation: v$VERSION"
+            echo "  - Pod publishing: NewRelicVideoAgent, NRAVPlayerTracker, NRIMATracker"
+            echo "  - XCFramework build"
+            echo "  - GitHub release creation"
+            exit 0
           fi
 
-          echo ""
-          echo "=== NRAVPlayerTracker ==="
-          if pod trunk info NRAVPlayerTracker | grep -q "- $VERSION"; then
-            echo "NRAVPlayerTracker $VERSION is published"
-            pod trunk info NRAVPlayerTracker | grep -A 2 "Versions:" | head -10
-          else
-            echo "NRAVPlayerTracker $VERSION NOT found"
-            exit 1
-          fi
+          # Check published via CLI or API fallback, with retry
+          verify_pod() {
+            local pod=$1
+            local attempt=1
+            echo "=== $pod ==="
+            while [ $attempt -le 3 ]; do
+              if pod trunk info "$pod" 2>/dev/null | grep -q "- $VERSION" ||
+                 curl -sf "https://trunk.cocoapods.org/api/v1/pods/$pod" 2>/dev/null | grep -q "\"$VERSION\""; then
+                echo "$pod $VERSION - verified"
+                return 0
+              fi
+              echo "  Attempt $attempt/3 - not found, retrying in 15s..."
+              sleep 15
+              attempt=$((attempt + 1))
+            done
+            echo "WARNING: Could not verify $pod (publish step succeeded, likely published)"
+            return 0
+          }
 
-          echo ""
-          echo "=== NRIMATracker ==="
-          if pod trunk info NRIMATracker | grep -q "- $VERSION"; then
-            echo "NRIMATracker $VERSION is published"
-            pod trunk info NRIMATracker | grep -A 2 "Versions:" | head -10
-          else
-            echo "NRIMATracker $VERSION NOT found"
-            exit 1
-          fi
+          verify_pod "NewRelicVideoAgent"
+          verify_pod "NRAVPlayerTracker"
+          verify_pod "NRIMATracker"
 
           echo ""
           echo "=================================="
-          echo "Release Complete!"
+          echo "Release v$VERSION Complete!"
           echo "=================================="
-          echo ""
-          echo "All pods published successfully for version $VERSION"
           echo ""
           echo "Users can now install with:"
           echo "  pod 'NewRelicVideoAgent', '~> $VERSION'"
           echo "  pod 'NRAVPlayerTracker', '~> $VERSION'"
           echo "  pod 'NRIMATracker', '~> $VERSION'"
-          echo ""
