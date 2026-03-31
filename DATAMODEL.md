@@ -44,7 +44,9 @@ An Attribute is a piece of data associated with an event. Attributes provide add
 | contentTitle             | The title of the video.                                                                                                                            |
 | contentIsLive            | True if the video is live.                                                                                                                         |
 | contentBitrate           | Average bitrate (in bits) of the video.                                                                                                            |
-| contentObservedBitrate   | Observed bitrate (in bits) - actual throughput of the video.                                                                                       |
+| contentManifestBitrate   | Indicated Bitrate: The throughput, in bits per second, required to play the stream as advertised by the server in the manifest.                     |
+| contentMeasuredBitrate   | Observed Bitrate: The actual, empirical throughput measured in bits per second across all downloaded media.                                         |
+| contentDownloadBitrate   | The actual download throughput in bits per second.                                                                                                 |
 | contentRenditionName     | Name of the rendition (e.g., 1080p).                                                                                                               |
 | contentRenditionBitrate  | Target Bitrate of the rendition.                                                                                                                   |
 | contentRenditionHeight   | Rendition actual Height (before re-scaling).                                                                                                       |
@@ -90,6 +92,22 @@ An Attribute is a piece of data associated with an event. Attributes provide add
 | CONTENT_BUFFER_END       | Content video buffering ended.                                                                   |
 | CONTENT_HEARTBEAT        | Content video heartbeat, an event that happens once every 30 seconds while the video is playing. |
 | CONTENT_RENDITION_CHANGE | Content video stream quality changed.                                                            |
+| QOE_AGGREGATE            | Quality of Experience aggregate event. Sent on qualifying harvest cycles when KPI values have changed, and once at content end. Requires `withQoeAggregateEnabled:YES` in configuration. Frequency controlled by `withQoeAggregateIntervalMultiplier:`. |
+
+#### QOE_AGGREGATE Attributes
+
+QOE_AGGREGATE events carry all standard VideoAction attributes (viewId, viewSession, contentId, etc.) plus the following KPI attributes:
+
+| Attribute Name            | Definition                                                                                                           |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| startupTime               | Time from content request to content start, excluding pre-roll ad time (ms).                                         |
+| peakBitrate               | Highest observed bitrate during playback (bps).                                                                      |
+| averageBitrate            | Time-weighted average bitrate during active playback only — paused/buffered/seeking time is excluded (bps).          |
+| totalPlaytime             | Total content playtime excluding pause, buffer, and seek (ms). Computed in real-time at harvest.                     |
+| totalRebufferingTime      | Total rebuffering time (ms). Counts all CONTENT_BUFFER_END events except the first one in the session (initial load). |
+| rebufferingRatio          | Rebuffering time as a percentage of total playtime: (totalRebufferingTime / totalPlaytime) * 100.                    |
+| hadStartupError           | True if an error occurred before content start.                                                                      |
+| hadPlaybackError          | True if an error occurred after content start.                                                                       |
 
 ### VideoAdAction
 

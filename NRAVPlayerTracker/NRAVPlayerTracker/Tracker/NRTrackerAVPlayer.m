@@ -108,7 +108,7 @@
     @catch(id e) {}
     
     self.isLive = NO;
-    
+
     self.lastRenditionHeight = 0;
     self.lastRenditionWidth = 0;
     self.lastTrackerTimeEvent = 0;
@@ -188,15 +188,17 @@
     
     self.timeObserver =
     [self.playerInstance addPeriodicTimeObserverForInterval:CMTimeMake(1, 2) queue:NULL usingBlock:^(CMTime time) {
-        
+
         AV_LOG(@"(AVPlayerTracker) Time Observer = %f , rate = %f , duration = %f", CMTimeGetSeconds(time), self.playerInstance.rate, CMTimeGetSeconds(self.playerInstance.currentItem.duration));
-        
+
         // Check various state changes periodically
         [self periodicVideoStateCheck];
-        
-        // If duration is NaN, then is live streaming. Otherwise is VoD.
-        self.isLive = isnan(CMTimeGetSeconds(self.playerInstance.currentItem.duration));
-        
+
+        // Only update live status after item metadata is loaded to prevent race condition
+        if (self.playerInstance.currentItem.status == AVPlayerItemStatusReadyToPlay) {
+            self.isLive = isnan(CMTimeGetSeconds(self.playerInstance.currentItem.duration));
+        }
+
         if (self.playerInstance.rate > 0.0) {
             [self sendStart];
             [self sendBufferEnd];
@@ -249,7 +251,7 @@
     else if ([keyPath isEqualToString:@"currentItem.status"]) {
         if (self.playerInstance.currentItem.status == AVPlayerItemStatusFailed) {
             AV_LOG(@"(AVPlayerTracker) Error While Playing = %@", self.playerInstance.currentItem.error);
-            
+
             if (self.playerInstance.currentItem.error) {
                 [self sendError:self.playerInstance.currentItem.error];
             }
@@ -403,9 +405,25 @@
     return @((NSInteger)event.averageVideoBitrate);
 }
 
-- (NSNumber *)getObservedBitrate {
+- (NSNumber *)getManifestBitrate {
+    AVPlayerItemAccessLogEvent *event = [self.playerInstance.currentItem.accessLog.events lastObject];
+    return @((NSInteger)event.indicatedBitrate);
+}
+
+- (NSNumber *)getMeasuredBitrate {
     AVPlayerItemAccessLogEvent *event = [self.playerInstance.currentItem.accessLog.events lastObject];
     return @((NSInteger)event.observedBitrate);
+}
+
+- (NSNumber *)getDownloadBitrate {
+    AVPlayerItemAccessLogEvent *event = [self.playerInstance.currentItem.accessLog.events lastObject];
+    // if (event.observedMaxBitrate > 0) {
+    //     return @((NSInteger)event.observedMaxBitrate);
+    // }
+    if (event.transferDuration > 0) {
+        return @((NSInteger)(event.numberOfBytesTransferred * 8.0 / event.transferDuration));
+    }
+    return (NSNumber *)[NSNull null];
 }
 
 - (NSNumber *)getRenditionWidth {

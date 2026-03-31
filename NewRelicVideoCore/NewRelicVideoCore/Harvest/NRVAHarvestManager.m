@@ -16,6 +16,23 @@
 #import "NRVADefaultSizeEstimator.h"
 #import "NRVAUtils.h"
 #import "NRVALog.h"
+#import "NRVideoDefs.h"
+#import "NRVAVideo.h"
+#import "NewRelicVideoAgent.h"
+#import "NRVideoTracker.h"
+
+// Private category to access NRVAVideo's internal properties
+@interface NRVAVideo ()
+@property (nonatomic, strong, readonly) NSMutableDictionary<NSString *, NSNumber *> *trackerIds;
+@property (nonatomic, strong, readonly) NRVAVideoConfiguration *configuration;
+@end
+
+// Private category to access NRVideoTracker's internal properties and methods
+@interface NRVideoTracker ()
+@property (nonatomic, readonly) BOOL isViewSessionActive;
+@property (nonatomic, readonly) id qoeAggregator;
+- (NSDictionary * _Nullable)generateQoeEventIfNeeded;
+@end
 
 // Define constants for event types to avoid magic strings
 static NSString * const kNRVAEventTypeOnDemand = @"ondemand";
@@ -125,6 +142,46 @@ static NSString * const kNRVAEventTypeLive = @"live";
     return [self.crashSafeFactory getRecoveryStats];
 }
 
+#pragma mark - QoE Harvest Integration
+
+// Collect QoE events from all active trackers
+- (NSArray<NSDictionary *> *)collectAllActiveQoeEvents {
+    NSMutableArray<NSDictionary *> *allQoeEvents = [NSMutableArray array];
+
+    // Access video manager singleton to get active trackers
+    NRVAVideo *videoInstance = [NRVAVideo getInstance];
+    if (!videoInstance) return [allQoeEvents copy];
+
+    // Get all tracker IDs from video manager
+    NSArray<NSNumber *> *trackerIds = nil;
+    @synchronized (videoInstance.trackerIds) {
+        trackerIds = [videoInstance.trackerIds.allValues copy];
+    }
+
+    // Iterate through active trackers
+    NewRelicVideoAgent *agent = [NewRelicVideoAgent sharedInstance];
+    for (NSNumber *trackerId in trackerIds) {
+        @try {
+            // Get content tracker (where QOE lives)
+            NRVideoTracker *tracker = (NRVideoTracker *)[agent contentTracker:trackerId];
+            if (!tracker || ![tracker isKindOfClass:[NRVideoTracker class]]) continue;
+
+            // Ask tracker for QoE if it's active and has aggregator
+            if (tracker.isViewSessionActive && tracker.qoeAggregator) {
+                NSDictionary *qoeEvent = [tracker generateQoeEventIfNeeded];
+                if (qoeEvent) {
+                    [allQoeEvents addObject:qoeEvent];
+                }
+            }
+        } @catch (NSException *exception) {
+            NRVA_ERROR_LOG(@"QoE generation failed for tracker %@: %@", trackerId, exception.reason);
+            // Continue with other trackers
+        }
+    }
+
+    return [allQoeEvents copy];
+}
+
 #pragma mark - Private Harvest Methods
 
 - (void)harvestNow:(NSString *)bufferType {
@@ -147,18 +204,27 @@ static NSString * const kNRVAEventTypeLive = @"live";
             NSArray<NSDictionary<NSString *, id> *> *events = [self.crashSafeFactory.getEventBuffer pollBatchByPriority:batchSizeBytes
                                                                                                            sizeEstimator:self.sizeEstimator
                                                                                                                 priority:priorityFilter];
-            
-            if (events && events.count > 0) {
-                [self.crashSafeFactory.getHttpClient sendEvents:events
+
+            NSMutableArray *finalEvents = events ? [events mutableCopy] : [NSMutableArray array];
+
+            // QoE is independent of the batch — collect from all active trackers
+            NSArray<NSDictionary *> *qoeEvents = [self collectAllActiveQoeEvents];
+            if (qoeEvents.count > 0) {
+                [finalEvents addObjectsFromArray:qoeEvents];
+                NRVA_DEBUG_LOG(@"Added %lu QoE events from active trackers", (unsigned long)qoeEvents.count);
+            }
+
+            if (finalEvents.count > 0) {
+                [self.crashSafeFactory.getHttpClient sendEvents:finalEvents
                                                      harvestType:harvestType
                                                       completion:^(BOOL success) {
                     if (success) {
                         // Notify event buffer about successful harvest to trigger any pending recovery
                         [self.crashSafeFactory.getEventBuffer onSuccessfulHarvest];
                     } else {
-                        [self.crashSafeFactory.getDeadLetterHandler handleFailedEvents:events harvestType:harvestType];
+                        [self.crashSafeFactory.getDeadLetterHandler handleFailedEvents:finalEvents harvestType:harvestType];
                     }
-                    NRVA_DEBUG_LOG(@"%@ harvest: %lu events", harvestType, (unsigned long)events.count);
+                    NRVA_DEBUG_LOG(@"%@ harvest: %lu events", harvestType, (unsigned long)finalEvents.count);
                 }];
             }
         } @catch (NSException *exception) {

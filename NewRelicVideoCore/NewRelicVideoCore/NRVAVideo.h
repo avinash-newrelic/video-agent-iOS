@@ -189,6 +189,12 @@
  */
 + (void)performEmergencyBackup;
 
+/**
+ * Check if QoE aggregate reporting is enabled
+ */
++ (BOOL)isQoeAggregateEnabled;
+
+
 @end
 
 /**
