@@ -31,6 +31,14 @@
 @property (nonatomic, readonly) NSInteger qoeAggregateIntervalMultiplier;
 
 /**
+ * Obfuscation rules applied to string attribute values before events are transmitted.
+ * Each rule is an NSDictionary with @"regex" (NSString) and @"replacement" (NSString) keys.
+ * Rules are applied in order; all rules run against every outgoing event's string attributes.
+ * Example: @{ @"regex": @"account-\\d+", @"replacement": @"ACCOUNT_ID" }
+ */
+@property (nonatomic, readonly, nullable) NSArray<NSDictionary *> *obfuscationRules;
+
+/**
  * Get dead letter retry interval in milliseconds
  * Optimized for different device types and network conditions
  */
@@ -66,6 +74,7 @@
 @property (nonatomic, strong) NSString *collectorAddress;
 @property (nonatomic, assign) BOOL qoeAggregateEnabled;
 @property (nonatomic, assign) NSInteger qoeAggregateIntervalMultiplier;
+@property (nonatomic, strong, nullable) NSArray<NSDictionary *> *obfuscationRules;
 
 /**
  * Auto-detect platform capabilities and apply optimizations
@@ -134,6 +143,16 @@
  * QoE aggregate is sent every N harvest cycles, where N is the multiplier.
  */
 - (instancetype)withQoeAggregateIntervalMultiplier:(NSInteger)multiplier;
+
+/**
+ * Set obfuscation rules to mask sensitive data in event attribute values before transmission.
+ * Rules are applied in order to every string attribute value in outgoing events.
+ * Invalid regex patterns are skipped with a warning; other rules continue to apply.
+ * Example:
+ *   @[ @{ @"regex": @"account-\\d+", @"replacement": @"ACCOUNT_ID" },
+ *      @{ @"regex": @"token=[^&\"]+", @"replacement": @"token=REDACTED" } ]
+ */
+- (instancetype)withObfuscationRules:(NSArray<NSDictionary *> *)rules;
 
 /**
  * Set custom collector domain address for /connect and /data endpoints (optional)

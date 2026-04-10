@@ -44,6 +44,8 @@ static NSString * const kNRVAEventTypeLive = @"live";
 @property (nonatomic, strong) id<NRVAHarvestComponentFactory> crashSafeFactory;
 @property (nonatomic, strong) NRVADefaultSizeEstimator *sizeEstimator;
 @property (nonatomic, strong) dispatch_queue_t harvestQueue;
+// Compiled obfuscation rules: each entry is @[NSRegularExpression, NSString replacement]
+@property (nonatomic, strong) NSArray<NSArray *> *compiledObfuscationRules;
 
 @end
 
@@ -86,8 +88,20 @@ static NSString * const kNRVAEventTypeLive = @"live";
                                                                           onDemandTask:onDemandTask
                                                                               liveTask:liveTask];
         
+        // Pre-compile obfuscation rules once so harvest doesn't pay compilation cost per-event
+        NSMutableArray *compiled = [NSMutableArray array];
+        for (id rule in config.obfuscationRules) {
+            if (![rule isKindOfClass:[NSDictionary class]]) continue;
+            NSString *pattern = rule[@"regex"];
+            NSString *replacement = rule[@"replacement"];
+            if (![pattern isKindOfClass:[NSString class]] || ![replacement isKindOfClass:[NSString class]]) continue;
+            NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];
+            if (regex) [compiled addObject:@[regex, replacement]];
+        }
+        _compiledObfuscationRules = [compiled copy];
+
         NRVA_DEBUG_LOG(@"HarvestManager initialized");
-        
+
         // Log recovery status if in recovery mode
         if ([_crashSafeFactory isRecovering]) {
             NRVA_DEBUG_LOG(@"🔄 Recovery mode detected: %@", [_crashSafeFactory getRecoveryStats]);
@@ -182,6 +196,30 @@ static NSString * const kNRVAEventTypeLive = @"live";
     return [allQoeEvents copy];
 }
 
+#pragma mark - Obfuscation
+
+- (NSArray<NSDictionary<NSString *, id> *> *)applyObfuscationRules:(NSArray<NSDictionary<NSString *, id> *> *)events {
+    if (!self.compiledObfuscationRules.count) return events;
+
+    NSMutableArray *obfuscatedEvents = [NSMutableArray arrayWithCapacity:events.count];
+    for (NSDictionary<NSString *, id> *event in events) {
+        NSMutableDictionary *mutableEvent = [event mutableCopy];
+        for (NSString *key in mutableEvent.allKeys) {
+            id value = mutableEvent[key];
+            if (![value isKindOfClass:[NSString class]]) continue;
+            NSMutableString *str = [value mutableCopy];
+            for (NSArray *rule in self.compiledObfuscationRules) {
+                NSRegularExpression *regex = rule[0];
+                NSString *replacement = rule[1];
+                [regex replaceMatchesInString:str options:0 range:NSMakeRange(0, str.length) withTemplate:replacement];
+            }
+            mutableEvent[key] = [str copy];
+        }
+        [obfuscatedEvents addObject:[mutableEvent copy]];
+    }
+    return [obfuscatedEvents copy];
+}
+
 #pragma mark - Private Harvest Methods
 
 - (void)harvestNow:(NSString *)bufferType {
@@ -214,17 +252,19 @@ static NSString * const kNRVAEventTypeLive = @"live";
                 NRVA_DEBUG_LOG(@"Added %lu QoE events from active trackers", (unsigned long)qoeEvents.count);
             }
 
-            if (finalEvents.count > 0) {
-                [self.crashSafeFactory.getHttpClient sendEvents:finalEvents
+            NSArray *eventsToSend = [self applyObfuscationRules:[finalEvents copy]];
+
+            if (eventsToSend.count > 0) {
+                [self.crashSafeFactory.getHttpClient sendEvents:eventsToSend
                                                      harvestType:harvestType
                                                       completion:^(BOOL success) {
                     if (success) {
                         // Notify event buffer about successful harvest to trigger any pending recovery
                         [self.crashSafeFactory.getEventBuffer onSuccessfulHarvest];
                     } else {
-                        [self.crashSafeFactory.getDeadLetterHandler handleFailedEvents:finalEvents harvestType:harvestType];
+                        [self.crashSafeFactory.getDeadLetterHandler handleFailedEvents:eventsToSend harvestType:harvestType];
                     }
-                    NRVA_DEBUG_LOG(@"%@ harvest: %lu events", harvestType, (unsigned long)finalEvents.count);
+                    NRVA_DEBUG_LOG(@"%@ harvest: %lu events", harvestType, (unsigned long)eventsToSend.count);
                 }];
             }
         } @catch (NSException *exception) {
