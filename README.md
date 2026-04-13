@@ -94,55 +94,35 @@ For complete integration examples including ad support, see the [ONBOARDING.md](
 
 ## Obfuscation Rules
 
-Video telemetry can inadvertently capture sensitive data in fields like `contentSrc`, `contentTitle`, `contentId`, and ad metadata (e.g. user IDs, account tokens, PII in URLs). Obfuscation rules let you mask this data before it is transmitted to New Relic.
+Obfuscation rules let you mask sensitive data before it is transmitted to New Relic.
 
 Each rule is a regex pattern paired with a replacement string. Rules are applied **in order** to every string attribute value in every outgoing event — including QoE events and crash-recovered events.
 
 ### Configuration
 
-<details>
-<summary>Objective-C</summary>
-<p>
-
+**Objective-C**
 ```objc
 NRVAVideoConfiguration *config = [[[[NRVAVideoConfiguration builder]
     withApplicationToken:@"YOUR_NEW_RELIC_TOKEN"]
     withObfuscationRules:@[
-        // Mask account IDs in URLs: /account-12345 → /ACCOUNT_ID
-        @{ @"regex": @"account-\\d+",       @"replacement": @"ACCOUNT_ID" },
-        // Redact auth tokens in query strings: token=abc123 → token=REDACTED
-        @{ @"regex": @"token=[^&\"]+",      @"replacement": @"token=REDACTED" },
-        // Mask user path segments: /users/john.doe → /users/USER_ID
-        @{ @"regex": @"/users/[^\"/]+",     @"replacement": @"/users/USER_ID" },
+        @{ @"regex": @"account-\\d+",  @"replacement": @"ACCOUNT_ID" },
+        @{ @"regex": @"token=[^&\"]+", @"replacement": @"token=REDACTED" },
     ]]
     build];
 [[[NRVAVideo newBuilder] withConfiguration:config] build];
 ```
 
-</p>
-</details>
-
-<details>
-<summary>Swift</summary>
-<p>
-
+**Swift**
 ```swift
 let config = NRVAVideoConfiguration.builder()
     .withApplicationToken("YOUR_NEW_RELIC_TOKEN")
     .withObfuscationRules([
-        // Mask account IDs in URLs: /account-12345 → /ACCOUNT_ID
-        ["regex": "account-\\d+",       "replacement": "ACCOUNT_ID"],
-        // Redact auth tokens in query strings: token=abc123 → token=REDACTED
-        ["regex": "token=[^&\"]+",      "replacement": "token=REDACTED"],
-        // Mask user path segments: /users/john.doe → /users/USER_ID
-        ["regex": "/users/[^\"/]+",     "replacement": "/users/USER_ID"],
+        ["regex": "account-\\d+",  "replacement": "ACCOUNT_ID"],
+        ["regex": "token=[^&\"]+", "replacement": "token=REDACTED"],
     ])
     .build()
 NRVAVideo.newBuilder().with(configuration: config).build()
 ```
-
-</p>
-</details>
 
 ### How it works
 
