@@ -199,23 +199,26 @@ static NSString * const kNRVAEventTypeLive = @"live";
 - (NSArray<NSDictionary<NSString *, id> *> *)applyObfuscationRules:(NSArray<NSDictionary<NSString *, id> *> *)events {
     if (!self.compiledObfuscationRules.count) return events;
 
-    NSMutableArray *obfuscatedEvents = [NSMutableArray arrayWithCapacity:events.count];
+    NSMutableArray *result = [NSMutableArray arrayWithCapacity:events.count];
     for (NSDictionary<NSString *, id> *event in events) {
-        NSMutableDictionary *mutableEvent = [event mutableCopy];
-        for (NSString *key in mutableEvent.allKeys) {
-            id value = mutableEvent[key];
+        NSMutableDictionary *mutableEvent = nil;
+        for (NSString *key in event) {
+            id value = event[key];
             if (![value isKindOfClass:[NSString class]]) continue;
             NSMutableString *str = [value mutableCopy];
+            BOOL changed = NO;
             for (NSArray *rule in self.compiledObfuscationRules) {
-                NSRegularExpression *regex = rule[0];
-                NSString *replacement = rule[1];
-                [regex replaceMatchesInString:str options:0 range:NSMakeRange(0, str.length) withTemplate:replacement];
+                NSUInteger n = [(NSRegularExpression *)rule[0] replaceMatchesInString:str options:0 range:NSMakeRange(0, str.length) withTemplate:rule[1]];
+                if (n > 0) changed = YES;
             }
-            mutableEvent[key] = [str copy];
+            if (changed) {
+                if (!mutableEvent) mutableEvent = [event mutableCopy];
+                mutableEvent[key] = str;
+            }
         }
-        [obfuscatedEvents addObject:[mutableEvent copy]];
+        [result addObject:mutableEvent ?: event];
     }
-    return [obfuscatedEvents copy];
+    return result;
 }
 
 #pragma mark - Private Harvest Methods
@@ -250,7 +253,7 @@ static NSString * const kNRVAEventTypeLive = @"live";
                 NRVA_DEBUG_LOG(@"Added %lu QoE events from active trackers", (unsigned long)qoeEvents.count);
             }
 
-            NSArray *finalObfuscatedEvents = [self applyObfuscationRules:[finalEvents copy]];
+            NSArray *finalObfuscatedEvents = [self applyObfuscationRules:finalEvents];
 
             if (finalObfuscatedEvents.count > 0) {
                 [self.crashSafeFactory.getHttpClient sendEvents:finalObfuscatedEvents
