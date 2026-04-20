@@ -92,6 +92,58 @@ let trackerId = NRVAVideo.addPlayer(playerConfig)
 
 For complete integration examples including ad support, see the [ONBOARDING.md](ONBOARDING.md) guide.
 
+## Obfuscation Rules
+
+Obfuscation rules let you mask sensitive data before it is transmitted to New Relic.
+
+Each rule is a regex pattern paired with a replacement string. Rules are applied **in order** to every string attribute value in every outgoing event — including QoE events and crash-recovered events.
+
+### Configuration
+
+**Objective-C**
+```objc
+NRVAVideoConfiguration *config = [[[[NRVAVideoConfiguration builder]
+    withApplicationToken:@"YOUR_NEW_RELIC_TOKEN"]
+    withObfuscationRules:@[
+        @{ @"regex": @"account-\\d+",  @"replacement": @"ACCOUNT_ID" },
+        @{ @"regex": @"token=[^&\"]+", @"replacement": @"token=REDACTED" },
+    ]]
+    build];
+[[[NRVAVideo newBuilder] withConfiguration:config] build];
+```
+
+**Swift**
+```swift
+let config = NRVAVideoConfiguration.builder()
+    .withApplicationToken("YOUR_NEW_RELIC_TOKEN")
+    .withObfuscationRules([
+        ["regex": "account-\\d+",  "replacement": "ACCOUNT_ID"],
+        ["regex": "token=[^&\"]+", "replacement": "token=REDACTED"],
+    ])
+    .build()
+NRVAVideo.newBuilder().with(configuration: config).build()
+```
+
+### How it works
+
+- Rules are applied per string attribute value, not on the raw JSON payload — numeric and boolean attributes are unaffected.
+- All rules run against every outgoing event (regular, live, QoE, and crash-recovered).
+- Rules are evaluated **in the order they are declared**. If two rules can match the same value, order matters.
+- The `applicationToken` and HTTP auth headers are never touched — obfuscation only runs on event attribute values.
+
+### Edge cases
+
+| Scenario | Behavior |
+|---|---|
+| No rules configured | No-op; zero performance overhead |
+| Empty `replacement` string | Matched content is deleted (this is intentional and allowed) |
+| Invalid regex pattern | `withObfuscationRules:` throws `NSInvalidArgumentException` at configuration time — fail fast before any events are sent |
+| Non-string attribute value (number, bool) | Skipped; only string values are processed |
+| Malformed rules array entry (not a dictionary) | Entry is skipped with a warning log |
+| `applicationToken` / auth headers | Never included in event attributes; not affected |
+| Rule ordering | Rules apply in array order — document this to your team if order matters |
+| Catastrophic backtracking | `NSRegularExpression` has no built-in timeout on iOS. Avoid patterns with unbounded quantifier nesting (e.g. `(a+)+`). Test rules against worst-case inputs before deploying. |
+
 ## Documentation
 
 To generate source code documentation, you can use [appledoc](https://github.com/tomaz/appledoc) as follows:

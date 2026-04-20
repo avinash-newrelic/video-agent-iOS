@@ -63,6 +63,7 @@ static const NSInteger kMemoryOptimizedMaxOfflineStorageSizeMB = 50; // 50MB
         _collectorAddress = builder.collectorAddress;
         _qoeAggregateEnabled = builder.qoeAggregateEnabled;
         _qoeAggregateIntervalMultiplier = builder.qoeAggregateIntervalMultiplier;
+        _obfuscationRules = [builder.obfuscationRules copy];
     }
     return self;
 }
@@ -204,6 +205,7 @@ static const NSInteger kMemoryOptimizedMaxOfflineStorageSizeMB = 50; // 50MB
         _collectorAddress = nil; // Will use default based on region
         _qoeAggregateEnabled = NO;
         _qoeAggregateIntervalMultiplier = 1;
+        _obfuscationRules = nil;
     }
     return self;
 }
@@ -313,6 +315,24 @@ static const NSInteger kMemoryOptimizedMaxOfflineStorageSizeMB = 50; // 50MB
 
 - (instancetype)withQoeAggregateEnabled:(BOOL)enabled {
     self.qoeAggregateEnabled = enabled;
+    return self;
+}
+
+- (instancetype)withObfuscationRules:(NSArray<NSDictionary *> *)rules {
+    for (id rule in rules) {
+        if (![rule isKindOfClass:[NSDictionary class]]) continue;
+        NSString *pattern = rule[@"regex"];
+        if (![pattern isKindOfClass:[NSString class]]) continue;
+        NSError *error = nil;
+        [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:&error];
+        if (error) {
+            @throw [NSException exceptionWithName:NSInvalidArgumentException
+                                           reason:[NSString stringWithFormat:@"Invalid obfuscation regex '%@': %@",
+                                                   pattern, error.localizedDescription]
+                                         userInfo:nil];
+        }
+    }
+    self.obfuscationRules = rules;
     return self;
 }
 
