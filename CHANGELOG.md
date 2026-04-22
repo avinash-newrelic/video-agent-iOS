@@ -1,3 +1,10 @@
+## [4.1.1](https://github.com/newrelic/video-agent-iOS/compare/v4.1.0...v4.1.1) (2026-04-22)
+
+### Bug Fixes
+
+* Add obfuscation rules support ([2734ca7](https://github.com/newrelic/video-agent-iOS/commit/2734ca737f05f342b401ea89eeb29fe93ae122d3))
+* New Bitrate Metrics Added ([61cc6d1](https://github.com/newrelic/video-agent-iOS/commit/61cc6d1bbf15417f0545a66300fc0806eb2254a1))
+
 ## [4.1.0](https://github.com/newrelic/video-agent-iOS/compare/v4.0.5...v4.1.0) (2026-03-31)
 
 ### Features
