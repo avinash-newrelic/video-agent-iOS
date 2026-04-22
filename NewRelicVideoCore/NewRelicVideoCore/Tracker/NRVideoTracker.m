@@ -245,8 +245,8 @@
             [attr setObject:[self getBitrate] forKey:@"contentBitrate"];
             [attr setObject:[self getRenditionBitrate] forKey:@"contentRenditionBitrate"];
             [attr setObject:[self getManifestBitrate] forKey:@"contentManifestBitrate"];
-            [attr setObject:[self getMeasuredBitrate] forKey:@"contentMeasuredBitrate"];
-            [attr setObject:[self getDownloadBitrate] forKey:@"contentDownloadBitrate"];
+            [attr setObject:[self getMeasuredBitrate] forKey:@"contentSegmentDownloadBitrate"];
+            [attr setObject:[self getDownloadBitrate] forKey:@"contentNetworkDownloadBitrate"];
         }
         [attr setObject:[self getRenditionWidth] forKey:@"contentRenditionWidth"];
         [attr setObject:[self getRenditionHeight] forKey:@"contentRenditionHeight"];
