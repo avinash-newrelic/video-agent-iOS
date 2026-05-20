@@ -27,32 +27,45 @@
     if (!regexp) {
         regexp = @"[A-Z_]+";
     }
-    
-    // Attribute doesn't exit yet, create it
-    if (![self.attributeBuckets objectForKey:regexp]) {
-        [self.attributeBuckets setObject:@{}.mutableCopy forKey:regexp];
+
+    @synchronized (self) {
+        NSMutableDictionary *bucket = self.attributeBuckets[regexp];
+        if (!bucket) {
+            bucket = [NSMutableDictionary dictionary];
+            self.attributeBuckets[regexp] = bucket;
+        }
+        bucket[key] = value;
     }
-    
-    [[self.attributeBuckets objectForKey:regexp] setObject:value forKey:key];
 }
 
 - (NSMutableDictionary *)generateAttributes:(NSString *)action append:(nullable NSDictionary *)attributes {
-    NSMutableDictionary *attr = @{}.mutableCopy;
-    
+    NSMutableDictionary *attr = [NSMutableDictionary dictionary];
+
     if (attributes) {
         [attr addEntriesFromDictionary:attributes];
     }
-    
-    for (NSString *filter in self.attributeBuckets) {
+
+    // Snapshot the buckets under the lock so iteration is over data that cannot
+    // change underneath us. Each inner bucket is also copied because callers
+    // (and this method) iterate them.
+    NSDictionary<NSString *, NSDictionary *> *snapshot;
+    @synchronized (self) {
+        NSMutableDictionary *copy = [NSMutableDictionary dictionaryWithCapacity:self.attributeBuckets.count];
+        for (NSString *filter in self.attributeBuckets) {
+            copy[filter] = [self.attributeBuckets[filter] copy];
+        }
+        snapshot = copy;
+    }
+
+    for (NSString *filter in snapshot) {
         if ([self checkFilter:filter withAction:action]) {
-            NSMutableDictionary *bucket = self.attributeBuckets[filter];
+            NSDictionary *bucket = snapshot[filter];
             for (NSString *attribute in bucket) {
-                id<NSCoding> value = bucket[attribute];
-                [attr setObject:value forKey:attribute];
+                attr[attribute] = bucket[attribute];
             }
         }
     }
-    
+
     return attr;
 }
 

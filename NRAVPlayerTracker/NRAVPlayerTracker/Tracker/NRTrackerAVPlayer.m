@@ -34,6 +34,14 @@
     return self;
 }
 
+- (void)dealloc {
+    // Defensive: tear down KVO observers and NotificationCenter listeners
+    // even if the host app released the tracker without calling [dispose].
+    // unregisterListeners wraps each removeObserver: in @try/@catch, so this
+    // is safe to call multiple times (idempotent with [dispose]).
+    [self unregisterListeners];
+}
+
 - (void)setPlayer:(id)player {
     [super setPlayer:player];
     self.playerInstance = player;
