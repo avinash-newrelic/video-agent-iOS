@@ -1,3 +1,5 @@
+## [4.1.2](https://github.com/newrelic/video-agent-iOS/compare/v4.1.2-rc.1...v4.1.2) (2026-05-20)
+
 ## [4.1.1](https://github.com/newrelic/video-agent-iOS/compare/v4.1.0...v4.1.1) (2026-04-22)
 
 ### Bug Fixes
