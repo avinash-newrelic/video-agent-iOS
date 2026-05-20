@@ -397,7 +397,7 @@
 
 
 - (NSString *)getTrackerVersion {
-    return @"4.1.1";
+    return @"4.1.2";
 }
 
 - (NSString *)getPlayerVersion {
