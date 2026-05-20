@@ -1,3 +1,9 @@
+## [4.1.3](https://github.com/newrelic/video-agent-iOS/compare/v4.1.2...v4.1.3) (2026-05-20)
+
+### Bug Fixes
+
+* republish umbrella to CocoaPods trunk via 4.1.3 ([a1c154b](https://github.com/newrelic/video-agent-iOS/commit/a1c154ba5d369464a76445a290f0c979f777f5d4))
+
 ## [4.1.2](https://github.com/newrelic/video-agent-iOS/compare/v4.1.2-rc.1...v4.1.2) (2026-05-20)
 
 ## [4.1.1](https://github.com/newrelic/video-agent-iOS/compare/v4.1.0...v4.1.1) (2026-04-22)
