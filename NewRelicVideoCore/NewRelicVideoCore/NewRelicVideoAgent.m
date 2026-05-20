@@ -86,23 +86,11 @@
 }
 
 - (nullable NRTracker *)contentTracker:(NSNumber *)trackerId {
-    NRTrackerPair *pair = [self.trackerPairs objectForKey:trackerId];
-    if ([[pair first] isEqual:[NSNull null]]) {
-        return nil;
-    }
-    else {
-        return [pair first];
-    }
+    return [[self.trackerPairs objectForKey:trackerId] first];
 }
 
 - (nullable NRTracker *)adTracker:(NSNumber *)trackerId {
-    NRTrackerPair *pair = [self.trackerPairs objectForKey:trackerId];
-    if ([[pair second] isEqual:[NSNull null]]) {
-        return nil;
-    }
-    else {
-        return [pair second];
-    }
+    return [[self.trackerPairs objectForKey:trackerId] second];
 }
 
 - (void)setUserId:(NSString *)userId {
