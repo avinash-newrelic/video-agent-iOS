@@ -6,6 +6,7 @@
 //
 
 #import "NREventAttributes.h"
+#import "NRVALog.h"
 
 @interface NREventAttributes ()
 
@@ -22,10 +23,60 @@
     return self;
 }
 
+// Convert any value the caller passed into something the harvest pipeline can
+// safely serialize via NSJSONSerialization. Returns nil for values that can't
+// be made JSON-safe — caller drops them with a log instead of letting the
+// async harvest crash deep inside the dispatch queue with no link to source.
+//
+//   NSString / NSNumber / NSNull → passed through
+//   NSDate                       → epoch-seconds NSNumber
+//   NSArray / NSDictionary       → recursively sanitized; nil if any element
+//                                  is unsanitizable
+//   anything else                → nil (caller logs and drops)
+- (nullable id)sanitizedValueForJSON:(id)value {
+    if (value == nil || value == [NSNull null]) {
+        return value;
+    }
+    if ([value isKindOfClass:[NSString class]] || [value isKindOfClass:[NSNumber class]]) {
+        return value;
+    }
+    if ([value isKindOfClass:[NSDate class]]) {
+        return @([(NSDate *)value timeIntervalSince1970]);
+    }
+    if ([value isKindOfClass:[NSArray class]]) {
+        NSMutableArray *cleaned = [NSMutableArray arrayWithCapacity:[(NSArray *)value count]];
+        for (id element in (NSArray *)value) {
+            id clean = [self sanitizedValueForJSON:element];
+            if (clean == nil) return nil;
+            [cleaned addObject:clean];
+        }
+        return cleaned;
+    }
+    if ([value isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *src = (NSDictionary *)value;
+        NSMutableDictionary *cleaned = [NSMutableDictionary dictionaryWithCapacity:src.count];
+        for (id k in src) {
+            if (![k isKindOfClass:[NSString class]]) return nil;
+            id clean = [self sanitizedValueForJSON:src[k]];
+            if (clean == nil) return nil;
+            cleaned[k] = clean;
+        }
+        return cleaned;
+    }
+    return nil;
+}
+
 - (void)setAttribute:(NSString *)key value:(id<NSCopying>)value filter:(nullable NSString *)regexp {
     // If no filter defined, use universal filter that matches any action name
     if (!regexp) {
         regexp = @"[A-Z_]+";
+    }
+
+    id sanitized = [self sanitizedValueForJSON:value];
+    if (sanitized == nil) {
+        NRVA_ERROR_LOG(@"setAttribute dropped key '%@' — value of type %@ is not JSON-safe (only NSString, NSNumber, NSDate, NSNull, NSArray, NSDictionary are accepted; nested containers are sanitized recursively).",
+                       key, NSStringFromClass([(NSObject *)value class]));
+        return;
     }
 
     @synchronized (self) {
@@ -34,7 +85,7 @@
             bucket = [NSMutableDictionary dictionary];
             self.attributeBuckets[regexp] = bucket;
         }
-        bucket[key] = value;
+        bucket[key] = sanitized;
     }
 }
 
