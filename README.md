@@ -44,7 +44,7 @@ Download the latest pre-built XCFrameworks from the [Releases](https://github.co
 Add the dependencies to your `Podfile`:
 
 ```ruby
-pod 'NewRelicVideoCore'
+pod 'NewRelicVideoAgent'
 pod 'NRAVPlayerTracker'
 pod 'NRIMATracker'   # Optional — only if using Google IMA ads
 ```
