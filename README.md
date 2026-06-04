@@ -256,11 +256,15 @@ let playerConfig = NRVAVideoPlayerConfiguration(
 You can also set attributes after initialization:
 
 ```swift
-// Set attribute on a specific content tracker
+// String
 NRVAVideo.setAttribute("contentSeries", value: "Season 1", trackerId: trackerId)
 
-// Set attribute on ad tracker
-NRVAVideo.setAdAttribute("adCampaign", value: "spring-promo", trackerId: trackerId)
+// Number / Bool
+NRVAVideo.setAttribute("contentResolution", value: 1080, trackerId: trackerId)
+NRVAVideo.setAttribute("isDVR", value: true, trackerId: trackerId)
+
+// Date — automatically converted to epoch seconds
+NRVAVideo.setAttribute("sessionStart", value: Date(), trackerId: trackerId)
 
 // Set global attribute across all trackers
 NRVAVideo.setGlobalAttribute("appVersion", value: "2.1.0")
@@ -332,6 +336,18 @@ Limits for custom attributes added to default mobile events:
 
 - **Attributes:** 128 maximum
 - **String attributes:** 4 KB maximum length (empty string values are not accepted)
+
+### Accepted Attribute Value Types
+
+| Type | Behaviour | Example |
+|------|-----------|---------|
+| `NSString` / `String` | Stored as-is | `"premium"` |
+| `NSNumber` / `Int`, `Double`, `Bool` | Stored as-is | `@(1080)`, `true` |
+| `NSDate` / `Date` | Converted to epoch seconds (`NSNumber`) | `NSDate.now` |
+| `NSArray` / `Array` | Stored recursively; invalid elements are dropped | `@[@"hls", @(4)]` |
+| `NSDictionary` / `[String: Any]` | Stored recursively; entries with non-string keys or invalid values are dropped | `@{@"cdn": @"cloudflare"}` |
+| `NSNull` | Stored as JSON `null` | `[NSNull null]` |
+| Anything else (`NSURL`, `NSData`, custom objects…) | **Dropped** with an error log; key is not stored | — |
 
 > **Note:** There are special keywords reserved for default attributes documented in [DATAMODEL.md](./DATAMODEL.md). Do not use these as custom attribute names, as they will be dropped by the agent.
 

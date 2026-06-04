@@ -813,15 +813,21 @@ Add custom metadata to your video tracking:
 #### Swift
 
 ```swift
-// Set attributes for specific tracker
+// String
 NRVAVideo.setAttribute(trackerId, key: "videoGenre", value: "Documentary")
+
+// Number / Bool
+NRVAVideo.setAttribute(trackerId, key: "contentResolution", value: 1080)
+NRVAVideo.setAttribute(trackerId, key: "isDVR", value: true)
+
+// Date — stored as epoch seconds
+NRVAVideo.setAttribute(trackerId, key: "sessionStart", value: Date())
 
 // Set global attributes (applies to all trackers)
 NRVAVideo.setGlobalAttribute("userTier", value: "Premium")
-
-// Set ad-specific attributes
-NRVAVideo.setAdAttribute(trackerId, key: "adCampaign", value: "Summer2024")
 ```
+
+Accepted value types: `String`/`NSString`, `Int`/`Double`/`Bool`/`NSNumber`, `Date`/`NSDate` (converted to epoch seconds), `Array`/`NSArray`, `[String: Any]`/`NSDictionary`. Unsupported types (`URL`, `Data`, custom objects) are dropped with an error log.
 
 ### User Identification
 
