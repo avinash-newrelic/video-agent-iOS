@@ -60,9 +60,12 @@
 }
 
 - (void)testStartupTimeSubtractsPreRollAdTime {
+    // Pre-roll ad time is set via setTotalPreRollAdTime: (the NRVideoTracker path),
+    // not via the attributes dict — that key never appears in production event dicts.
     [self.aggregator processAction:CONTENT_REQUEST attributes:@{} isPlaying:NO];
+    [self.aggregator setTotalPreRollAdTime:3000];
     [self.aggregator processAction:CONTENT_START
-                        attributes:@{@"timeSinceRequested": @(8000), @"totalPreRollAdTime": @(3000)}
+                        attributes:@{@"timeSinceRequested": @(8000)}
                          isPlaying:YES];
 
     NSDictionary *result = [self.aggregator generateAggregateAttributes];
@@ -71,9 +74,10 @@
 
 - (void)testStartupTimeClampedToZero {
     [self.aggregator processAction:CONTENT_REQUEST attributes:@{} isPlaying:NO];
-    // Pre-roll ad time exceeds timeSinceRequested — should clamp to 0
+    // Pre-roll ad time exceeds timeSinceRequested — should clamp to 0.
+    [self.aggregator setTotalPreRollAdTime:5000];
     [self.aggregator processAction:CONTENT_START
-                        attributes:@{@"timeSinceRequested": @(2000), @"totalPreRollAdTime": @(5000)}
+                        attributes:@{@"timeSinceRequested": @(2000)}
                          isPlaying:YES];
 
     NSDictionary *result = [self.aggregator generateAggregateAttributes];
@@ -422,10 +426,10 @@
                         attributes:@{@"totalPlaytime": @(0)}
                          isPlaying:NO];
 
+    [self.aggregator setTotalPreRollAdTime:1000];
     [self.aggregator processAction:CONTENT_START
                         attributes:@{
                             @"timeSinceRequested": @(3000),
-                            @"totalPreRollAdTime": @(1000),
                             @"contentBitrate": @(2000000),
                             @"totalPlaytime": @(0)
                         }

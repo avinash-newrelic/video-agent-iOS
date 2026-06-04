@@ -25,13 +25,16 @@
 
 // Convert any value the caller passed into something the harvest pipeline can
 // safely serialize via NSJSONSerialization. Returns nil for values that can't
-// be made JSON-safe — caller drops them with a log instead of letting the
+// be made JSON-safe — caller logs and drops them instead of letting the
 // async harvest crash deep inside the dispatch queue with no link to source.
 //
 //   NSString / NSNumber / NSNull → passed through
 //   NSDate                       → epoch-seconds NSNumber
-//   NSArray / NSDictionary       → recursively sanitized; nil if any element
-//                                  is unsanitizable
+//   NSArray                      → recursively sanitized; unsanitizable elements
+//                                  are dropped (logged) and the rest are kept
+//   NSDictionary                 → recursively sanitized; entries with a
+//                                  non-string key or unsanitizable value are
+//                                  dropped (logged) and the rest are kept
 //   anything else                → nil (caller logs and drops)
 - (nullable id)sanitizedValueForJSON:(id)value {
     if (value == nil || value == [NSNull null]) {
@@ -47,7 +50,11 @@
         NSMutableArray *cleaned = [NSMutableArray arrayWithCapacity:[(NSArray *)value count]];
         for (id element in (NSArray *)value) {
             id clean = [self sanitizedValueForJSON:element];
-            if (clean == nil) return nil;
+            if (clean == nil) {
+                NRVA_ERROR_LOG(@"sanitizedValueForJSON: dropped array element of type %@ — not JSON-safe.",
+                               NSStringFromClass([element class]));
+                continue;
+            }
             [cleaned addObject:clean];
         }
         return cleaned;
@@ -56,9 +63,17 @@
         NSDictionary *src = (NSDictionary *)value;
         NSMutableDictionary *cleaned = [NSMutableDictionary dictionaryWithCapacity:src.count];
         for (id k in src) {
-            if (![k isKindOfClass:[NSString class]]) return nil;
+            if (![k isKindOfClass:[NSString class]]) {
+                NRVA_ERROR_LOG(@"sanitizedValueForJSON: dropped dictionary entry — key of type %@ is not a string.",
+                               NSStringFromClass([k class]));
+                continue;
+            }
             id clean = [self sanitizedValueForJSON:src[k]];
-            if (clean == nil) return nil;
+            if (clean == nil) {
+                NRVA_ERROR_LOG(@"sanitizedValueForJSON: dropped dictionary key '%@' — value of type %@ is not JSON-safe.",
+                               k, NSStringFromClass([src[k] class]));
+                continue;
+            }
             cleaned[k] = clean;
         }
         return cleaned;
@@ -72,10 +87,15 @@
         regexp = @"[A-Z_]+";
     }
 
+    // Silently drop nil — no error, nothing to store.
+    if (value == nil) {
+        return;
+    }
+
     id sanitized = [self sanitizedValueForJSON:value];
     if (sanitized == nil) {
         NRVA_ERROR_LOG(@"setAttribute dropped key '%@' — value of type %@ is not JSON-safe (only NSString, NSNumber, NSDate, NSNull, NSArray, NSDictionary are accepted; nested containers are sanitized recursively).",
-                       key, NSStringFromClass([(NSObject *)value class]));
+                       key, NSStringFromClass([(id)value class]));
         return;
     }
 

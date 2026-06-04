@@ -296,9 +296,6 @@
         self.lastContentEventAttributes = [attributes copy];
     }
 
-    // No longer needed - totalPreRollAdTime is now handled internally by QoE aggregator
-
-
     return [super preSendAction:action attributes:attributes];
 }
 

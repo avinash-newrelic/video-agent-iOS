@@ -216,10 +216,6 @@ static NSDictionary<NSString *, QoEActionHandler> *sActionHandlers;
 }
 
 - (void)setTotalPreRollAdTime:(long)preRollAdTime {
-    if (!self) {
-        NSLog(@"ERROR: setTotalPreRollAdTime called on nil aggregator");
-        return;
-    }
     @synchronized (self) {
         _totalPreRollAdTime = preRollAdTime;
     }
@@ -234,10 +230,6 @@ static NSDictionary<NSString *, QoEActionHandler> *sActionHandlers;
     //   Includes ad buffer, seek, and pause — not just ad playing time.
     NSNumber *timeSinceRequested = attributes[@"timeSinceRequested"];
     if (timeSinceRequested) {
-        NSNumber *preRollAdTime = attributes[@"totalPreRollAdTime"];
-        if (preRollAdTime) {
-            _totalPreRollAdTime = [preRollAdTime longValue];
-        }
         long startup = [timeSinceRequested longValue] - _totalPreRollAdTime;
         self.startupTime = @(MAX(startup, 0));
     }

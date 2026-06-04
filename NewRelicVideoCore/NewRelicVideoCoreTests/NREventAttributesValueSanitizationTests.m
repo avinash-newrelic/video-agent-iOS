@@ -15,8 +15,9 @@
 //  Sanitization runs at NREventAttributes.setAttribute: and either
 //    (a) converts the value (NSDate → epoch-seconds NSNumber)
 //    (b) passes it through (NSString, NSNumber, NSNull, JSON-safe containers)
-//    (c) drops it with a debug log (any other type, or nested containers
-//        whose contents are unsanitizable).
+//    (c) for NSArray/NSDictionary: strips unsanitizable elements/entries (logged)
+//        and keeps the rest — partial data is better than losing the whole container
+//    (d) drops the entire value with a log (top-level unsanitizable type)
 //
 
 @import XCTest;
@@ -110,19 +111,40 @@
     XCTAssertNil([self.attrs sanitizedValueForJSON:[[NSObject alloc] init]]);
 }
 
-- (void)testDictionaryWithNonStringKeyIsRejected {
-    NSDictionary *bad = @{ @(1): @"v" }; // numeric key, not allowed in JSON
-    XCTAssertNil([self.attrs sanitizedValueForJSON:bad]);
+- (void)testDictionaryWithNonStringKeyDropsEntryKeepsRest {
+    // Numeric key is not JSON-safe — that entry is dropped, but other valid entries survive.
+    NSMutableDictionary *bad = [NSMutableDictionary dictionary];
+    [bad setObject:@"good_value" forKey:@"valid_key"];
+    bad[@(1)] = @"numeric_key_value";  // non-string key — dropped
+    NSDictionary *result = [self.attrs sanitizedValueForJSON:bad];
+    XCTAssertNotNil(result, @"dict is not nil — valid entries are kept");
+    XCTAssertEqualObjects(result[@"valid_key"], @"good_value");
+    XCTAssertEqual(result.count, 1, @"only the valid entry survives");
 }
 
-- (void)testDictionaryContainingURLIsRejected {
-    NSDictionary *bad = @{ @"link": [NSURL URLWithString:@"https://example.com"] };
-    XCTAssertNil([self.attrs sanitizedValueForJSON:bad], @"reject if any nested element is unsanitizable");
+- (void)testDictionaryContainingURLDropsEntryKeepsRest {
+    NSDictionary *mixed = @{ @"ok": @"keep_me", @"link": [NSURL URLWithString:@"https://example.com"] };
+    NSDictionary *result = [self.attrs sanitizedValueForJSON:mixed];
+    XCTAssertNotNil(result, @"dict is not nil — valid entries are kept");
+    XCTAssertEqualObjects(result[@"ok"], @"keep_me");
+    XCTAssertNil(result[@"link"], @"NSURL entry must be stripped");
+    XCTAssertEqual(result.count, 1);
 }
 
-- (void)testArrayContainingURLIsRejected {
-    NSArray *bad = @[ @"ok", [NSURL URLWithString:@"https://example.com"] ];
-    XCTAssertNil([self.attrs sanitizedValueForJSON:bad]);
+- (void)testArrayContainingURLDropsElementKeepsRest {
+    NSArray *mixed = @[ @"ok", [NSURL URLWithString:@"https://example.com"], @(42) ];
+    NSArray *result = [self.attrs sanitizedValueForJSON:mixed];
+    XCTAssertNotNil(result, @"array is not nil — valid elements are kept");
+    XCTAssertEqual(result.count, 2, @"URL element is stripped, the other two survive");
+    XCTAssertEqualObjects(result[0], @"ok");
+    XCTAssertEqualObjects(result[1], @(42));
+}
+
+- (void)testArrayWithAllUnsanitizableElementsReturnsEmptyArray {
+    NSArray *allBad = @[ [NSURL URLWithString:@"x"], [NSData data] ];
+    NSArray *result = [self.attrs sanitizedValueForJSON:allBad];
+    XCTAssertNotNil(result, @"returns empty array, not nil");
+    XCTAssertEqual(result.count, 0);
 }
 
 #pragma mark - setAttribute integration
@@ -156,6 +178,37 @@
     XCTAssertNil(result[@"never_set"], @"unsanitizable value on first write must not create the key");
 }
 
+- (void)testSetAttributeWithNilValueIsSilentlyDropped {
+    // nil should be silently dropped (no error log, no crash, key stays absent)
+    [self.attrs setAttribute:@"k" value:nil filter:nil];
+    NSDictionary *result = [self.attrs generateAttributes:@"ANY_ACTION" append:nil];
+    XCTAssertNil(result[@"k"], @"nil value must be silently dropped without creating the key");
+}
+
+- (void)testSetAttributeArrayWithMixedTypesKeepsValidElements {
+    // Partial container fix: array stores valid elements, strips the NSURL.
+    NSArray *mixed = @[ @"title", [NSURL URLWithString:@"x"], @(99) ];
+    [self.attrs setAttribute:@"arr" value:(id<NSCopying>)mixed filter:nil];
+    NSDictionary *result = [self.attrs generateAttributes:@"ANY_ACTION" append:nil];
+    NSArray *stored = result[@"arr"];
+    XCTAssertNotNil(stored);
+    XCTAssertEqual(stored.count, 2, @"only the two valid elements survive");
+    XCTAssertEqualObjects(stored[0], @"title");
+    XCTAssertEqualObjects(stored[1], @(99));
+}
+
+- (void)testSetAttributeDictWithMixedValuesKeepsValidEntries {
+    // Partial container fix: dict stores valid entries, strips the NSURL value.
+    NSDictionary *mixed = @{ @"label": @"keep", @"link": [NSURL URLWithString:@"x"] };
+    [self.attrs setAttribute:@"meta" value:(id<NSCopying>)mixed filter:nil];
+    NSDictionary *result = [self.attrs generateAttributes:@"ANY_ACTION" append:nil];
+    NSDictionary *stored = result[@"meta"];
+    XCTAssertNotNil(stored);
+    XCTAssertEqual(stored.count, 1);
+    XCTAssertEqualObjects(stored[@"label"], @"keep");
+    XCTAssertNil(stored[@"link"]);
+}
+
 /**
  The end-to-end claim of the fix: any value that survives setAttribute must be
  JSON-serializable. If this passes, the harvest pipeline will not crash on it.
@@ -168,8 +221,11 @@
                        value:@{ @"inner_date": [NSDate dateWithTimeIntervalSince1970:0] }
                       filter:nil];
     [self.attrs setAttribute:@"array" value:@[ @(1), @"two", @(3.0) ] filter:nil];
+    // Mixed array: NSURL stripped, valid elements kept — result must still be JSON-safe.
+    NSArray *mixed = @[ @"good", [NSURL URLWithString:@"x"], @(5) ];
+    [self.attrs setAttribute:@"mixed_array" value:(id<NSCopying>)mixed filter:nil];
 
-    // These should all be dropped, never reach storage:
+    // These top-level unsanitizable values are dropped entirely, never reach storage:
     [self.attrs setAttribute:@"url" value:(id<NSCopying>)[NSURL URLWithString:@"x"] filter:nil];
     [self.attrs setAttribute:@"data" value:(id<NSCopying>)[NSData data] filter:nil];
 
@@ -182,6 +238,9 @@
 
     XCTAssertNil(result[@"url"], @"NSURL must have been dropped");
     XCTAssertNil(result[@"data"], @"NSData must have been dropped");
+
+    NSArray *storedMixed = result[@"mixed_array"];
+    XCTAssertEqual(storedMixed.count, 2, @"valid elements from mixed array survive");
 }
 
 @end
