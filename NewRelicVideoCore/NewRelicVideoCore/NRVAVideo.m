@@ -15,6 +15,7 @@
 #import "NRVAUtils.h"
 #import "NewRelicVideoAgent.h"
 #import "Tracker/NRTracker.h"
+#import "Tracker/NRVideoTracker.h"
 #import <AVFoundation/AVFoundation.h>
 
 // Import IMA types for the convenience methods
@@ -345,7 +346,23 @@ static dispatch_once_t onceToken;
     return [self getInstance].configuration.qoeAggregateEnabled;
 }
 
++ (void)sendSeekStart:(NSInteger)trackerId {
+    if (![self isInitialized]) return;
+    NRVideoTracker *tracker = (NRVideoTracker *)[[NewRelicVideoAgent sharedInstance] contentTracker:@(trackerId)];
+    if (tracker) {
+        [tracker sendSeekStart];
+        NRVA_DEBUG_LOG(@"sendSeekStart called for tracker %ld", (long)trackerId);
+    }
+}
 
++ (void)sendSeekEnd:(NSInteger)trackerId {
+    if (![self isInitialized]) return;
+    NRVideoTracker *tracker = (NRVideoTracker *)[[NewRelicVideoAgent sharedInstance] contentTracker:@(trackerId)];
+    if (tracker) {
+        [tracker sendSeekEnd];
+        NRVA_DEBUG_LOG(@"sendSeekEnd called for tracker %ld", (long)trackerId);
+    }
+}
 
 #pragma mark - Internal Methods (Package Private)
 

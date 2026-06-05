@@ -22,6 +22,9 @@
 @property (nonatomic) float lastRenditionWidth;
 @property (nonatomic) Float64 lastTrackerTimeEvent;
 @property (nonatomic) NSString *renditionChangeShift;
+// Seek auto-detection: track expected vs actual playhead position each 0.5s tick
+@property (nonatomic) Float64 lastKnownTime;       // playhead at last tick
+@property (nonatomic) Float64 lastKnownRate;       // rate at last tick
 
 @end
 
@@ -278,6 +281,12 @@
     else if ([keyPath isEqualToString:@"timeControlStatus"]) {
         if (@available(iOS 10.0, *)) {
             if (self.playerInstance.timeControlStatus == AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate) {
+                // If content has already started, WaitingToPlayAtSpecifiedRate means the user
+                // initiated a seek — auto-signal seek start so integrators using AVPlayerViewController
+                // don't need to call sendSeekStart: manually.
+                if (self.state.isStarted && !self.state.isSeeking) {
+                    [self.state startSeekingEvent];
+                }
                 [self sendBufferStart];
             }
             else {

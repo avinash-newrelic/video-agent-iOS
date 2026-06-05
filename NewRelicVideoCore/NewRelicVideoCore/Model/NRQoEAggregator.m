@@ -216,10 +216,6 @@ static NSDictionary<NSString *, QoEActionHandler> *sActionHandlers;
 }
 
 - (void)setTotalPreRollAdTime:(long)preRollAdTime {
-    if (!self) {
-        NSLog(@"ERROR: setTotalPreRollAdTime called on nil aggregator");
-        return;
-    }
     @synchronized (self) {
         _totalPreRollAdTime = preRollAdTime;
     }

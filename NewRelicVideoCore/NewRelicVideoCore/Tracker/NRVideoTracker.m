@@ -296,9 +296,6 @@
         self.lastContentEventAttributes = [attributes copy];
     }
 
-    // No longer needed - totalPreRollAdTime is now handled internally by QoE aggregator
-
-
     return [super preSendAction:action attributes:attributes];
 }
 
@@ -938,6 +935,24 @@
     // Dirty check: Only send if KPI attributes have changed
     if ([self qoeAttributesChangedFrom:self.lastSentQoEAttributes to:qoeEvent]) {
         self.lastSentQoEAttributes = qoeEvent;
+        NRVA_DEBUG_LOG(@"[QOE_AGGREGATE] => {\n"
+                       "  startupTime          = %@\n"
+                       "  peakBitrate          = %@\n"
+                       "  averageBitrate       = %@\n"
+                       "  totalPlaytime        = %@\n"
+                       "  totalRebufferingTime = %@\n"
+                       "  rebufferingRatio     = %@\n"
+                       "  hadStartupError      = %@\n"
+                       "  hadPlaybackError     = %@\n"
+                       "}",
+                       qoeEvent[@"startupTime"]          ?: @"(nil)",
+                       qoeEvent[@"peakBitrate"]          ?: @"(nil)",
+                       qoeEvent[@"averageBitrate"]        ?: @"(nil)",
+                       qoeEvent[@"totalPlaytime"]         ?: @"(nil)",
+                       qoeEvent[@"totalRebufferingTime"]  ?: @"(nil)",
+                       qoeEvent[@"rebufferingRatio"]      ?: @"(nil)",
+                       qoeEvent[@"hadStartupError"]       ?: @"(nil)",
+                       qoeEvent[@"hadPlaybackError"]      ?: @"(nil)");
         return qoeEvent;
     }
 
