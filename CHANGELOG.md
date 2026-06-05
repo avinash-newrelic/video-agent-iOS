@@ -1,3 +1,13 @@
+## [4.1.4](https://github.com/newrelic/video-agent-iOS/compare/v4.1.3...v4.1.4) (2026-06-05)
+
+### Bug Fixes
+
+* expose sendSeekStart/sendSeekEnd on NRVAVideo; auto-detect seek in AVPlayerTracker ([34493b4](https://github.com/newrelic/video-agent-iOS/commit/34493b4999968ff4e726c3f3ba3d266ff6d3f4e2))
+* NRTrackerPair must not leak NSNull sentinel to callers ([82ef94f](https://github.com/newrelic/video-agent-iOS/commit/82ef94fcbd4f432dedf2dabbc523a19fe8134d34))
+* partial container sanitization, nil guard, and dead code removal ([6aac79f](https://github.com/newrelic/video-agent-iOS/commit/6aac79f7ef52d648a4f3c0636ed97d5b01edc314))
+* read totalPreRollAdTime from CONTENT_START attributes ([d565378](https://github.com/newrelic/video-agent-iOS/commit/d565378286af59e2d7109566bc0081ea31872246))
+* sanitize attribute values at setAttribute storage boundary ([7d07298](https://github.com/newrelic/video-agent-iOS/commit/7d072980d1e6b4a85339c864ea8245194a38f688))
+
 ## [4.1.3](https://github.com/newrelic/video-agent-iOS/compare/v4.1.2...v4.1.3) (2026-05-20)
 
 ### Bug Fixes
