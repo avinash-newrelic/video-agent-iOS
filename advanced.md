@@ -188,7 +188,10 @@ We can also set custom attributes for all events:
 <p>
 
 ```Objective-C
-[tracker setAttribute:@"myAttr" value:@"myVal"];
+[tracker setAttribute:@"myAttr" value:@"myVal"];          // NSString
+[tracker setAttribute:@"resolution" value:@(1080)];       // NSNumber
+[tracker setAttribute:@"isDVR" value:@YES];               // BOOL
+[tracker setAttribute:@"sessionStart" value:[NSDate date]]; // NSDate → stored as epoch seconds
 ```
 
 </p>
@@ -203,6 +206,8 @@ tracker.setAttribute("myAttr", "myVal");
 
 </p>
 </details>
+
+Accepted value types (iOS): `NSString`, `NSNumber` (including `BOOL`), `NSDate` (converted to epoch seconds), `NSArray`, `NSDictionary` (string keys only). Unsupported types such as `NSURL` or `NSData` are dropped with a log.
 
 Or only for specific events, specifiying a regexp filter for the action:
 

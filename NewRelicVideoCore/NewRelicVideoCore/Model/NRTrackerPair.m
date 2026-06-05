@@ -16,6 +16,9 @@
 
 @implementation NRTrackerPair
 
+// NSArray cannot hold nil, so a missing tracker is stored internally as NSNull.
+// That sentinel is an implementation detail — `first` and `second` translate
+// it back to nil so callers always see nil-or-tracker, never NSNull.
 - (instancetype)initWithFirst:(nullable NRTracker *)first second:(nullable NRTracker *)second {
     if (self = [super init]) {
         if (first == nil) {
@@ -29,12 +32,14 @@
     return self;
 }
 
-- (NRTracker *)first {
-    return self.pair[0];
+- (nullable NRTracker *)first {
+    id value = self.pair[0];
+    return value == [NSNull null] ? nil : value;
 }
 
-- (NRTracker *)second {
-    return self.pair[1];
+- (nullable NRTracker *)second {
+    id value = self.pair[1];
+    return value == [NSNull null] ? nil : value;
 }
 
 @end

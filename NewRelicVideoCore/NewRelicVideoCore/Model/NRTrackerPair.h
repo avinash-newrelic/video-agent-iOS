@@ -26,18 +26,18 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)initWithFirst:(nullable NRTracker *)first second:(nullable NRTracker *)second;
 
 /**
- Get first tracker.
- 
- @return First tracker.
+ Get first tracker, or nil if none was provided at init time.
+
+ @return First tracker, or nil.
  */
-- (NRTracker *)first;
+- (nullable NRTracker *)first;
 
 /**
- Get second tracker.
- 
- @return Second tracker.
+ Get second tracker, or nil if none was provided at init time.
+
+ @return Second tracker, or nil.
  */
-- (NRTracker *)second;
+- (nullable NRTracker *)second;
 
 @end
 

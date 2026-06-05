@@ -194,6 +194,23 @@
  */
 + (BOOL)isQoeAggregateEnabled;
 
+/**
+ * Signal that the user started seeking on the content tracker.
+ * Call this when your UI's scrubber begins dragging.
+ * AVPlayer integrations using NRTrackerAVPlayer detect this automatically —
+ * only needed for custom player integrations.
+ * @param trackerId The tracker ID returned by addPlayer:
+ */
++ (void)sendSeekStart:(NSInteger)trackerId;
+
+/**
+ * Signal that the user finished seeking on the content tracker.
+ * Call this when your UI's scrubber is released.
+ * AVPlayer integrations using NRTrackerAVPlayer detect this automatically —
+ * only needed for custom player integrations.
+ * @param trackerId The tracker ID returned by addPlayer:
+ */
++ (void)sendSeekEnd:(NSInteger)trackerId;
 
 @end
 
