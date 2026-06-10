@@ -1,3 +1,9 @@
+## [4.2.0](https://github.com/newrelic/video-agent-iOS/compare/v4.1.4...v4.2.0) (2026-06-10)
+
+### Features
+
+* enable QoE by default with interval multiplier 2 ([bb8f02f](https://github.com/newrelic/video-agent-iOS/commit/bb8f02fb238c76880f93346ddb7136d6a899717a))
+
 ## [4.1.4](https://github.com/newrelic/video-agent-iOS/compare/v4.1.3...v4.1.4) (2026-06-05)
 
 ### Bug Fixes
