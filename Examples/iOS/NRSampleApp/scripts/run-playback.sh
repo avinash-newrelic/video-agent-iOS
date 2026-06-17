@@ -2,10 +2,10 @@
 #
 # run-playback.sh — automation for the NRSampleApp catalog.
 #
-# Builds the app, boots a simulator, and plays each catalog item:
-#   - VOD scenarios run to natural end (wait for "Player didPlayToEnd"
-#     in the per-scenario log file). Capped at 15 minutes for safety.
-#   - Live scenarios run for a configured wall-clock duration.
+# Builds the app, boots a simulator, and plays each catalog item for a
+# fixed wall-clock duration declared per scenario. Durations are explicit
+# because Apple's HLS reference streams (BipBop) are 30+ minutes long —
+# "play to natural end" makes daily runs absurd.
 #
 # This is REAL playback — AVKit's `VideoPlayer` decodes and renders the
 # stream in the simulator. The simulator window stays focused so a human
@@ -35,16 +35,16 @@ ARTIFACTS_DIR="${ARTIFACTS_DIR:-build/playback-artifacts}"
 DERIVED_DATA="${DERIVED_DATA:-build}"
 APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/NRSampleApp.app"
 
-# VOD safety cap: if "didPlayToEnd" never fires, stop after this long.
-VOD_MAX_WAIT_SECS=900
-
-# Default scenarios — id:mode where mode is "vod" or "live=<seconds>".
+# Default scenarios — id:duration_secs.
+# Each video plays for that many seconds of REAL playback then is killed.
+# Tune per-scenario as needed. Apple BipBop streams are ~30 min total;
+# 60s of real playback is plenty to verify decode+render+no-error.
 # Order: cheap VODs first (fast feedback), then live (longest).
 DEFAULT_SCENARIOS=(
-  "bipbop-adv:vod"
-  "bipbop-basic:vod"
-  "big-buck-bunny:vod"
-  "akamai-live:live=1800"
+  "bipbop-adv:60"
+  "bipbop-basic:60"
+  "big-buck-bunny:60"
+  "akamai-live:1800"
 )
 
 # Optional subset via SCENARIOS=foo,bar
@@ -115,72 +115,56 @@ SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
   echo "Device:       $DEVICE_NAME ($DEVICE_ID)"
   echo "Scenarios:    ${#RUN_LIST[@]}"
   echo ""
-  printf "%-20s %-14s %-10s %-8s %-7s %-10s\n" "id" "mode" "elapsed" "events" "fails" "result"
-  printf "%-20s %-14s %-10s %-8s %-7s %-10s\n" "----" "----" "-------" "------" "-----" "------"
+  printf "%-20s %-10s %-8s %-7s %-10s\n" "id" "duration" "events" "fails" "result"
+  printf "%-20s %-10s %-8s %-7s %-10s\n" "----" "--------" "------" "-----" "------"
 } > "$SUMMARY"
 
 OVERALL_RC=0
 
 run_one_scenario() {
   local ID="$1"
-  local MODE="$2"
-
-  local MAX_WAIT
-  local END_MODE
-  if [[ "$MODE" == "vod" ]]; then
-    MAX_WAIT=$VOD_MAX_WAIT_SECS
-    END_MODE="end"
-  elif [[ "$MODE" == live=* ]]; then
-    MAX_WAIT="${MODE#live=}"
-    END_MODE="time"
-  else
-    echo "    ERROR: unknown mode '$MODE'"
-    return 2
-  fi
+  local DURATION="$2"
 
   echo ""
-  echo "==> $ID  (mode=$END_MODE, cap=${MAX_WAIT}s)"
+  echo "==> $ID  (duration=${DURATION}s)"
 
   # Make sure no stale instance is running.
   xcrun simctl terminate "$DEVICE_ID" "$APP_BUNDLE_ID" 2>/dev/null || true
   sleep 1
 
-  # Launch the app with the auto-play arg. The app's RootView picks up the
-  # arg, redirects logs to auto-play-<ID>.log (truncated), navigates to the
-  # player view, and starts real playback.
+  # Bring the simulator to the front so its GPU keeps rendering frames
+  # (iOS Simulator pauses video render when its window is occluded).
+  osascript -e 'tell application "Simulator" to activate' 2>/dev/null || true
+
+  # Launch the app with the auto-play arg. RootView picks up the arg,
+  # redirects logs to auto-play-<ID>.log (truncated), navigates to the
+  # player, and starts real playback.
   xcrun simctl launch "$DEVICE_ID" "$APP_BUNDLE_ID" --auto-play "$ID" > /dev/null
-  echo "    launched · video should now be rendering in the simulator"
+  echo "    launched · video rendering in simulator for ${DURATION}s"
 
   # Find the log file inside the app's data container.
   CONTAINER=$(xcrun simctl get_app_container "$DEVICE_ID" "$APP_BUNDLE_ID" data 2>/dev/null || true)
   local LOG_FILE="$CONTAINER/Documents/logs/auto-play-$ID.log"
 
-  # Mid-playback screenshot: capture at 30s in (or 25% through, whichever sooner).
-  local SHOT_AT=$(( MAX_WAIT < 120 ? MAX_WAIT / 4 : 30 ))
+  # Mid-playback screenshot: capture at 25% through (or 30s, whichever sooner).
+  local SHOT_AT=$(( DURATION < 120 ? DURATION / 4 : 30 ))
   ( sleep "$SHOT_AT" && xcrun simctl io "$DEVICE_ID" screenshot "$ARTIFACTS_DIR/$ID-screenshot.png" 2>/dev/null ) &
   local SHOT_PID=$!
 
-  # Wait loop.
+  # Sleep the duration. Print progress every 60s for long runs.
   local ELAPSED=0
-  local NATURAL_END=0
-  while [ $ELAPSED -lt $MAX_WAIT ]; do
+  while [ $ELAPSED -lt $DURATION ]; do
     sleep 5
     ELAPSED=$((ELAPSED + 5))
 
-    if [ "$END_MODE" = "end" ] && [ -f "$LOG_FILE" ]; then
-      if grep -q "Player didPlayToEnd" "$LOG_FILE" 2>/dev/null; then
-        NATURAL_END=1
-        echo "    didPlayToEnd at ${ELAPSED}s — natural end"
-        break
-      fi
-      if grep -q "\[FAIL " "$LOG_FILE" 2>/dev/null; then
-        echo "    early failure detected at ${ELAPSED}s"
-        break
-      fi
+    # Early-exit on FAIL events — no need to wait the full duration.
+    if [ -f "$LOG_FILE" ] && grep -q "\[FAIL " "$LOG_FILE" 2>/dev/null; then
+      echo "    [FAIL] event detected at ${ELAPSED}s — stopping early"
+      break
     fi
 
     if [ $((ELAPSED % 60)) -eq 0 ]; then
-      echo "    still playing... ${ELAPSED}s elapsed"
+      echo "    still playing... ${ELAPSED}s / ${DURATION}s"
     fi
   done
 
@@ -209,23 +193,21 @@ run_one_scenario() {
   local RESULT
   if [ "$FAIL_COUNT" -gt 0 ]; then
     RESULT="fail"
-  elif [ "$END_MODE" = "end" ] && [ "$NATURAL_END" -eq 0 ]; then
-    RESULT="timeout"
   else
     RESULT="ok"
   fi
 
   echo "    result=$RESULT  events=$EVENT_COUNT  fails=$FAIL_COUNT"
-  printf "%-20s %-14s %-10s %-8s %-7s %-10s\n" \
-    "$ID" "$MODE" "${ELAPSED}s" "$EVENT_COUNT" "$FAIL_COUNT" "$RESULT" >> "$SUMMARY"
+  printf "%-20s %-10s %-8s %-7s %-10s\n" \
+    "$ID" "${DURATION}s" "$EVENT_COUNT" "$FAIL_COUNT" "$RESULT" >> "$SUMMARY"
 
   [ "$RESULT" = "ok" ] || return 1
 }
 
 for entry in "${RUN_LIST[@]}"; do
   ID="${entry%%:*}"
-  MODE="${entry#*:}"
-  run_one_scenario "$ID" "$MODE" || OVERALL_RC=1
+  DURATION="${entry##*:}"
+  run_one_scenario "$ID" "$DURATION" || OVERALL_RC=1
 done
 
 echo ""
