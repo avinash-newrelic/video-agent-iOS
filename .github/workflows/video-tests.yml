@@ -1,0 +1,145 @@
+name: video-tests
+
+# This workflow runs the NRSampleApp test suite. It lives only on the
+# `internal/video-rig` branch and is intentionally NOT merged to master.
+#
+# How "code under test" is selected:
+#   - Scheduled run         → merges `master` into the tooling branch
+#   - workflow_dispatch     → merges `target_ref` (or PR head if pr_number set)
+#   - Push to tooling branch → tests the tooling branch as-is (no merge)
+#
+# Discipline: this branch may only ADD files vs master, never modify them.
+# The "Sanity-check" step enforces this so merges from master are conflict-free.
+
+on:
+  schedule:
+    # Hourly at :17. More cadences (six-hourly, daily) added when scenarios
+    # at those cadences exist. See CHECKLIST.md.
+    - cron: '17 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Branch, tag, or commit SHA to merge into the tooling branch and test'
+        required: false
+        default: 'master'
+      pr_number:
+        description: 'Optional: PR number to test (overrides target_ref)'
+        required: false
+        default: ''
+
+  push:
+    branches: [internal/video-rig]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: video-tests-${{ github.event.inputs.pr_number || github.event.inputs.target_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: NRSampleApp tests
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout tooling branch
+        uses: actions/checkout@v4
+        with:
+          ref: internal/video-rig
+          fetch-depth: 0
+
+      - name: Sanity-check (tooling branch only ADDS files vs master)
+        run: |
+          set -euo pipefail
+          mods=$(git diff --name-status master...HEAD | grep -v '^A' || true)
+          if [ -n "$mods" ]; then
+            echo "::error::Tooling branch modified existing files; merges from master will conflict:"
+            echo "$mods"
+            exit 1
+          fi
+
+      - name: Configure git for merging
+        run: |
+          git config user.email "ci@noreply.local"
+          git config user.name  "video-tests CI"
+
+      - name: Pull in code under test
+        env:
+          PR_NUMBER:  ${{ github.event.inputs.pr_number }}
+          TARGET_REF: ${{ github.event.inputs.target_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Testing PR #$PR_NUMBER"
+            git fetch origin "pull/$PR_NUMBER/head:under-test"
+            git merge --no-edit under-test
+          elif [ "$EVENT_NAME" = "push" ]; then
+            echo "Push event: testing tooling branch as-is, no merge."
+          else
+            ref="${TARGET_REF:-master}"
+            echo "Merging $ref into tooling branch"
+            git fetch origin "$ref"
+            git merge --no-edit FETCH_HEAD
+          fi
+
+      - name: Show merged tree summary
+        run: |
+          echo "Current HEAD: $(git rev-parse HEAD)"
+          echo "Top-level dirs:"
+          ls -la
+
+      - name: Set up Ruby (for CocoaPods)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: false
+
+      - name: Install CocoaPods + XcodeGen
+        run: |
+          set -euo pipefail
+          gem install cocoapods --no-document
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: Examples/iOS/NRSampleApp
+        run: xcodegen generate
+
+      - name: pod install
+        working-directory: Examples/iOS/NRSampleApp
+        run: pod install --repo-update
+
+      - name: Run tests
+        working-directory: Examples/iOS/NRSampleApp
+        env:
+          NEW_RELIC_APP_TOKEN: TEST_TOKEN_SAMPLE
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -workspace NRSampleApp.xcworkspace \
+            -scheme NRSampleApp \
+            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -resultBundlePath TestResults.xcresult \
+            -derivedDataPath build/ \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee xcodebuild.log
+
+      - name: Upload .xcresult bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults-${{ github.run_id }}
+          path: Examples/iOS/NRSampleApp/TestResults.xcresult
+          retention-days: 7
+
+      - name: Upload xcodebuild log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log-${{ github.run_id }}
+          path: Examples/iOS/NRSampleApp/xcodebuild.log
+          retention-days: 7
