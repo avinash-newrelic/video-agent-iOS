@@ -28,10 +28,6 @@ on:
         default: ''
 
       # ------ Per-leg toggles ------
-      run_iOS_18_iPhone_17_Pro:
-        description: 'Run iOS 18 / iPhone 17 Pro'
-        type: boolean
-        default: true
       run_iOS_18_iPhone_16_Pro:
         description: 'Run iOS 18 / iPhone 16 Pro'
         type: boolean
@@ -81,7 +77,6 @@ concurrency:
 
 # Defaults for cron + push (no inputs available there).
 env:
-  CRON_DEFAULT_iOS_18_iPhone_17_Pro: 'true'
   CRON_DEFAULT_iOS_18_iPhone_16_Pro: 'true'
   CRON_DEFAULT_iOS_17_iPhone_15:     'true'
   CRON_DEFAULT_iOS_16_iPhone_14:     'false'
@@ -97,14 +92,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - tag: iOS-18-iPhone-17-Pro
-            platform: iOS
-            scheme: NRSampleApp_iOS
-            device: iPhone 17 Pro
-            os_version: ""
-            download_os: ""
-            input_key: run_iOS_18_iPhone_17_Pro
-
           - tag: iOS-18-iPhone-16-Pro
             platform: iOS
             scheme: NRSampleApp_iOS
@@ -117,7 +104,7 @@ jobs:
             platform: iOS
             scheme: NRSampleApp_iOS
             device: iPhone 15
-            os_version: "17.5"
+            os_version: ""        # use whatever iPhone 15 has pre-installed
             download_os: ""
             input_key: run_iOS_17_iPhone_15
 
@@ -142,7 +129,6 @@ jobs:
         id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
-          INPUT_iOS_18_iPhone_17_Pro: ${{ inputs.run_iOS_18_iPhone_17_Pro }}
           INPUT_iOS_18_iPhone_16_Pro: ${{ inputs.run_iOS_18_iPhone_16_Pro }}
           INPUT_iOS_17_iPhone_15:     ${{ inputs.run_iOS_17_iPhone_15 }}
           INPUT_iOS_16_iPhone_14:     ${{ inputs.run_iOS_16_iPhone_14 }}

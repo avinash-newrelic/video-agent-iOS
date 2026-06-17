@@ -61,7 +61,7 @@ struct LogViewerView: View {
                                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                                 .foregroundStyle(color(for: line))
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
+                                .selectableTextOnIOS()
                                 .padding(.horizontal, 12)
                                 .id(idx)
                         }
@@ -97,6 +97,17 @@ struct LogViewerView: View {
         if line.contains("[ACTION") { return .cyan }
         if line.contains("[EVENT") { return .green }
         return .primary
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func selectableTextOnIOS() -> some View {
+        #if os(iOS)
+        self.textSelection(.enabled)
+        #else
+        self
+        #endif
     }
 }
 

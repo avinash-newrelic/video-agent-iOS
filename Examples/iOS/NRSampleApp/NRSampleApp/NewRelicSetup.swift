@@ -29,24 +29,34 @@ enum NewRelicSetup {
             return
         }
 
-        var b = NRVAVideoConfiguration.builder()
-            .withApplicationToken(token)
-            .withQoeAggregateEnabled(qoeEnabled())
-            .withQoeAggregateIntervalMultiplier(qoeMultiplier())
-            .withHarvestCycle(harvestCycleSecs())
-            .withLiveHarvestCycle(liveHarvestCycleSecs())
-            .withDebugLogging(debugLogging())
-            .withMemoryOptimization(memoryOptimization())
-            .withRegularBatchSize(regularBatchSizeBytes())
-            .withLiveBatchSize(liveBatchSizeBytes())
-            .withMaxDeadLetterSize(maxDeadLetterSize())
+        // NRVA's headers don't have NS_ASSUME_NONNULL_BEGIN, so Swift
+        // imports each builder method as returning Optional. Use ?-chaining
+        // and guard at the end.
+        guard var b = NRVAVideoConfiguration.builder()?
+            .withApplicationToken(token)?
+            .withQoeAggregateEnabled(qoeEnabled())?
+            .withQoeAggregateIntervalMultiplier(qoeMultiplier())?
+            .withHarvestCycle(harvestCycleSecs())?
+            .withLiveHarvestCycle(liveHarvestCycleSecs())?
+            .withDebugLogging(debugLogging())?
+            .withMemoryOptimization(memoryOptimization())?
+            .withRegularBatchSize(regularBatchSizeBytes())?
+            .withLiveBatchSize(liveBatchSizeBytes())?
+            .withMaxDeadLetterSize(maxDeadLetterSize())?
             .withMaxOfflineStorageSize(maxOfflineStorageMB())
-
-        if let collector = collectorAddress() {
-            b = b.withCollectorAddress(collector)
+        else {
+            print("[NewRelicSetup] failed to build NRVA configuration")
+            return
         }
 
-        let config = b.build()
+        if let collector = collectorAddress(), let withCol = b.withCollectorAddress(collector) {
+            b = withCol
+        }
+
+        guard let config = b.build() else {
+            print("[NewRelicSetup] failed to build NRVA configuration")
+            return
+        }
 
         _ = NRVAVideo.newBuilder()
             .withConfiguration(config)
