@@ -52,10 +52,12 @@ enum NewRelicSetup {
             .withConfiguration(config)
             .build()
 
+        // Don't echo collector address or any token-derived value — these
+        // appear in CI artifacts on a public repo. State only: set / default.
         print("""
             [NewRelicSetup] started · harvest=\(harvestCycleSecs())s · liveHarvest=\(liveHarvestCycleSecs())s · \
             debug=\(debugLogging()) · memOpt=\(memoryOptimization()) · \
-            qoe=\(qoeEnabled())x\(qoeMultiplier()) · collector=\(collectorAddress() ?? "(default)")
+            qoe=\(qoeEnabled())x\(qoeMultiplier()) · collector=\(collectorAddress() != nil ? "(custom-set)" : "(default)")
             """)
 
         if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {

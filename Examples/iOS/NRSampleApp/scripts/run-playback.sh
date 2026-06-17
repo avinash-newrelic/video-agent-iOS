@@ -146,14 +146,14 @@ if [ -n "${NR_OVERRIDES_JSON:-}" ] && [ "$NR_OVERRIDES_JSON" != "{}" ] && comman
   read_override collector_address         NR_COLLECTOR
 fi
 
-echo "==> NRVA config (resolved):"
+echo "==> NRVA config (resolved; values redacted):"
 echo "    harvest=${NR_HARVEST}s  liveHarvest=${NR_LIVE_HARVEST}s"
 echo "    regBatch=${NR_REG_BATCH}B  liveBatch=${NR_LIVE_BATCH}B"
 echo "    deadLetter=${NR_DEAD_LETTER}  offlineMB=${NR_OFFLINE_MB}"
 echo "    qoe=${NR_QOE_ENABLED}×${NR_QOE_MULT}  debug=${NR_DEBUG}  memOpt=${NR_MEM_OPT}"
-echo "    collector=${NR_COLLECTOR:-(default)}"
-echo "    extraStreams=${NR_EXTRA_STREAMS:+(set, $(echo "$NR_EXTRA_STREAMS" | head -c 60)...)}"
-echo "    extraStreams=${NR_EXTRA_STREAMS:-(none)}"
+echo "    collector=${NR_COLLECTOR:+(custom-set)}${NR_COLLECTOR:-(default)}"
+echo "    extraStreams=${NR_EXTRA_STREAMS:+(set)}${NR_EXTRA_STREAMS:-(none)}"
+echo "    appToken=${NEW_RELIC_APP_TOKEN:+(set)}${NEW_RELIC_APP_TOKEN:-(not set)}"
 
 # ---- Scenarios -------------------------------------------------------------
 
@@ -229,10 +229,10 @@ SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
   echo "OS:           ${OS_VERSION:-(default)}"
   echo "Leg tag:      ${LEG_TAG:-(none)}"
   echo "Scenarios:    ${#RUN_LIST[@]}"
-  echo "NR token:     ${NEW_RELIC_APP_TOKEN:+set}${NEW_RELIC_APP_TOKEN:-(not set)}"
+  echo "NR token:     ${NEW_RELIC_APP_TOKEN:+(set)}${NEW_RELIC_APP_TOKEN:-(not set)}"
   echo "Harvest:      ${NR_HARVEST}s / live ${NR_LIVE_HARVEST}s"
   echo "Debug log:    $NR_DEBUG"
-  echo "Collector:    ${NR_COLLECTOR:-(default)}"
+  echo "Collector:    ${NR_COLLECTOR:+(custom-set)}${NR_COLLECTOR:-(default)}"
   echo ""
   printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" "id" "mode" "elapsed" "events" "fails" "result"
   printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" "----" "----" "-------" "------" "-----" "------"
