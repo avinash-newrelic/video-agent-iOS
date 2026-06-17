@@ -292,8 +292,27 @@ run_one_scenario() {
   set_env NEW_RELIC_MEMORY_OPTIMIZATION     "$NR_MEM_OPT"
   set_env PLAYBACK_EXTRA_STREAMS            "$NR_EXTRA_STREAMS"
 
-  xcrun simctl launch "$DEVICE_ID" "$APP_BUNDLE_ID" --auto-play "$ID" > /dev/null
-  echo "    launched · ${MODE} mode · cap ${CAP_SECS}s"
+  # Pre-create the artifacts dir so the console redirect target exists.
+  local DEST="$ARTIFACTS_DIR/$ID"
+  mkdir -p "$DEST"
+
+  # Launch with --console so the simulator's stdout/stderr (NRVA debug
+  # lines like "SEND EVENT CONTENT_REQUEST", "viewId = ...", etc.) is
+  # captured to a file. --console blocks until the app exits, so we
+  # background it and `wait` on the PID after we terminate the app.
+  xcrun simctl launch --console "$DEVICE_ID" "$APP_BUNDLE_ID" --auto-play "$ID" \
+    > "$DEST/simulator.log" 2>&1 &
+  local LAUNCH_PID=$!
+
+  # Also stream unified logs from this process to a syslog-format file.
+  # Catches NSLog and os_log output that wouldn't appear via --console.
+  xcrun simctl spawn "$DEVICE_ID" log stream \
+    --predicate 'process == "NRSampleApp"' \
+    --info --debug --style syslog \
+    > "$DEST/syslog.log" 2>&1 &
+  local LOG_STREAM_PID=$!
+
+  echo "    launched · ${MODE} mode · cap ${CAP_SECS}s · capturing console + syslog"
 
   CONTAINER=$(xcrun simctl get_app_container "$DEVICE_ID" "$APP_BUNDLE_ID" data 2>/dev/null || true)
   local LOG_FILE="$CONTAINER/Documents/logs/auto-play-$ID.log"
@@ -326,9 +345,15 @@ run_one_scenario() {
   wait $SHOT_PID 2>/dev/null || true
   xcrun simctl terminate "$DEVICE_ID" "$APP_BUNDLE_ID" 2>/dev/null || true
 
-  local DEST="$ARTIFACTS_DIR/$ID"
-  mkdir -p "$DEST"
-  [ -d "$CONTAINER/Documents/logs" ] && cp -R "$CONTAINER/Documents/logs/." "$DEST/" 2>/dev/null || true
+  # The --console launch detaches once the app exits.
+  # `log stream` runs until killed, so kill it and reap.
+  kill "$LOG_STREAM_PID" 2>/dev/null || true
+  wait $LAUNCH_PID 2>/dev/null || true
+  wait $LOG_STREAM_PID 2>/dev/null || true
+
+  if [ -d "$CONTAINER/Documents/logs" ]; then
+    cp -R "$CONTAINER/Documents/logs/." "$DEST/" 2>/dev/null || true
+  fi
 
   local EVENT_COUNT=0
   local FAIL_COUNT=0
@@ -366,9 +391,12 @@ echo "==> DEVICE COMPLETE: ${LEG_TAG:-$DEVICE_NAME}"
 echo "============================================================"
 cat "$SUMMARY"
 echo "============================================================"
-PASSED=$(grep -c " ok " "$SUMMARY" 2>/dev/null || echo 0)
-FAILED=$(grep -c " fail " "$SUMMARY" 2>/dev/null || echo 0)
-CAPHIT=$(grep -c " cap-hit " "$SUMMARY" 2>/dev/null || echo 0)
+# grep -c outputs "0" AND exits 1 when no matches. Combining with `|| echo 0`
+# would append another "0", producing "0\n0" — breaks the integer compares
+# below. Capture-then-fallback keeps the value clean.
+PASSED=$(grep -c " ok "      "$SUMMARY" 2>/dev/null) || PASSED=0
+FAILED=$(grep -c " fail "    "$SUMMARY" 2>/dev/null) || FAILED=0
+CAPHIT=$(grep -c " cap-hit " "$SUMMARY" 2>/dev/null) || CAPHIT=0
 TOTAL=${#RUN_LIST[@]}
 if [ "$FAILED" -gt 0 ]; then
   OVERALL="fail"

@@ -143,7 +143,10 @@ build/playback-artifacts/
 ├── SUMMARY.txt                        ← pass/fail per scenario + OVERALL line
 ├── pod-install.log
 ├── build.log
-├── <id>/auto-play-<id>.log            ← full per-scenario log
+├── <id>/
+│   ├── auto-play-<id>.log             ← AppLog (AVPlayer KVO observations)
+│   ├── simulator.log                  ← stdout/stderr (NRVA debug, "SEND EVENT", viewId, etc.)
+│   └── syslog.log                     ← unified-logging stream (NSLog / os_log)
 └── <id>-screenshot.png                ← mid-playback frame
 ```
 
