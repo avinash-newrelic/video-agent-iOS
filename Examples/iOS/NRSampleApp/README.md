@@ -1,11 +1,8 @@
 # NRSampleApp
 
-Modern iOS reference app for the **New Relic Video Agent**. SwiftUI, iOS 15+.
-Demonstrates QoE, custom attributes, multi-tracker scenarios, and integration
-patterns alongside a catalog of test scenarios driven by XCUITest in CI.
+Modern iOS reference app for the **New Relic Video Agent**. SwiftUI, iOS 15+, AVPlayer-based playback. Demonstrates how to wire the agent into a real video app using public test streams.
 
-This app lives only on the `internal/video-rig` branch and is **not** intended
-to be merged to `master`. It is the test rig.
+This app lives only on the `internal/video-rig` branch and is not merged to `master`.
 
 ## Requirements
 
@@ -22,34 +19,43 @@ pod install                # produces NRSampleApp.xcworkspace
 open NRSampleApp.xcworkspace
 ```
 
-Build and run the `NRSampleApp` scheme. The app launches into a scenario menu.
+Set `NEW_RELIC_APP_TOKEN` in the Xcode scheme's Environment Variables before running. Then build and run the `NRSampleApp` scheme.
 
-## Project layout
+## What's in the app
+
+A catalog of public test streams across HLS VOD, HLS Live, and progressive MP4. Tap a card to open the player. Each playback session is tracked by NRVA via `NewRelicSetup.addAVPlayer(...)`.
+
+```
+Watch
+├── Featured       Apple BipBop (hero card)
+├── Live           Akamai 24/7 test stream
+└── On Demand      Sintel · Tears of Steel · Big Buck Bunny
+```
+
+## Files
 
 ```
 NRSampleApp/
-├── project.yml                    XcodeGen source of truth (.xcodeproj is generated, gitignored)
-├── Podfile                        References the local agent via :path
-├── NRSampleApp/
-│   ├── NRSampleAppApp.swift       @main entry point
-│   ├── NewRelicSetup.swift        ★ canonical NRVA wiring — copy this verbatim
-│   ├── ScenarioCatalog.swift      Loads scenario manifests at startup
-│   ├── LaunchArgRouter.swift      --scenario X support for XCUITest
-│   └── Views/
-│       ├── ScenarioMenuView.swift Manual mode: pick a scenario
-│       └── EventLogOverlay.swift  Live NRVA event tap (drives test assertions)
-├── scenarios/                     YAML manifests, one per scenario
-└── NRSampleAppUITests/            XCUITest target
+├── project.yml                  XcodeGen source of truth (.xcodeproj is generated, gitignored)
+├── Podfile                      References the local agent via :path
+└── NRSampleApp/
+    ├── NRSampleAppApp.swift     @main entry — calls NewRelicSetup.start()
+    ├── NewRelicSetup.swift      ★ canonical NRVA wiring — copy this verbatim
+    ├── ContentItem.swift        Codable model for a streamable item
+    ├── ContentCatalog.swift     Hard-coded catalog of public test streams
+    ├── HomeView.swift           Catalog screen with hero + horizontal sections
+    ├── CardView.swift           Reusable card with gradient placeholder
+    └── PlayerView.swift         Full-bleed AVKit player + NRVA tracking
 ```
 
-## Adding a scenario
+## Adding a new content item
 
-1. Add `scenarios/<id>.yml` declaring the scenario (id, view, stream, cadence, expected events).
-2. Add the matching SwiftUI view in `NRSampleApp/Views/`.
-3. Add an XCUITest function in `NRSampleAppUITests/` that launches with `--scenario <id>` and asserts against `EventLogOverlay`.
+1. Append a `ContentItem` to `ContentCatalog.items`.
+2. Choose its `section` (`.featured` / `.live` / `.vod`).
+3. Run.
 
-CI on `internal/video-rig` discovers manifests automatically and runs scenarios at the cadence each manifest declares.
+## Notes
 
-## Scope
-
-See `../../../CHECKLIST.md` (root of `internal/video-rig` worktree) for the full v1 feature list and what's deferred.
+- All streams are public. Replace with your own when integrating into a real app.
+- Poster art uses generated gradients; supply a `posterURL` to use a real thumbnail.
+- The Podfile uses `:path => '../../../'` so any change to the agent's source is picked up by the next `pod install`.

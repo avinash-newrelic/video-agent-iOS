@@ -1,9 +1,0 @@
-{
-  "id": "basic-vod",
-  "title": "Basic VOD HLS",
-  "summary": "Adaptive HLS VOD playback (Apple BipBop test stream)",
-  "cadence": "hourly",
-  "streamUrl": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8",
-  "expectedDurationSecs": 60,
-  "expectedEvents": ["VIEW_LOADED", "CONTENT_REQUEST", "CONTENT_START"]
-}

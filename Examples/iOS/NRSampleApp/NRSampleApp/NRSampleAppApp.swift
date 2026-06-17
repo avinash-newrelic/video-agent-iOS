@@ -9,7 +9,8 @@ struct NRSampleAppApp: App {
 
     var body: some Scene {
         WindowGroup {
-            LaunchArgRouter().resolveRoot()
+            HomeView()
+                .preferredColorScheme(.dark)
         }
     }
 }
