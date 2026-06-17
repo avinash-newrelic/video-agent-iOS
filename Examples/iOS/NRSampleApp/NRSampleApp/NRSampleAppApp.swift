@@ -5,7 +5,7 @@ struct NRSampleAppApp: App {
 
     var body: some Scene {
         WindowGroup {
-            HomeView()
+            RootView()
                 .preferredColorScheme(.dark)
         }
     }

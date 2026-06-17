@@ -1,0 +1,57 @@
+name: video-playback
+
+# Runs NRSampleApp playback automation:
+#   - VOD scenarios play to natural end (didPlayToEnd) — capped at 15 min
+#   - Live scenarios run for 30 minutes (configurable per scenario)
+# One trigger → all scenarios play → logs + screenshots uploaded as artifacts.
+#
+# This workflow lives only on `internal/video-rig` and is not merged to master.
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'   # every 6 hours
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: 'Comma-separated subset (e.g., bipbop-adv,akamai-live). Empty = all.'
+        required: false
+        default: ''
+  push:
+    branches: [internal/video-rig]
+    paths:
+      - 'Examples/iOS/NRSampleApp/**'
+      - '.github/workflows/playback.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: video-playback-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playback:
+    name: NRSampleApp playback
+    runs-on: macos-14
+    timeout-minutes: 75   # full run is ~33 min; cap allows for build + retries
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Run playback automation
+        working-directory: Examples/iOS/NRSampleApp
+        env:
+          SCENARIOS: ${{ inputs.scenarios }}
+          DEVICE_NAME: iPhone 16 Pro
+        run: ./scripts/run-playback.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playback-${{ github.run_id }}
+          path: Examples/iOS/NRSampleApp/build/playback-artifacts/
+          retention-days: 14

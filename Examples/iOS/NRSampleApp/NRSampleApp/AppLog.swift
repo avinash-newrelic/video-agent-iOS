@@ -22,8 +22,22 @@ final class AppLog {
 
     private let osLog = OSLog(subsystem: "com.newrelic.video.sample.NRSampleApp", category: "app")
     private let fileQueue = DispatchQueue(label: "applog.file", qos: .utility)
+    private let stateLock = NSLock()
+    private var _customFileName: String?
 
     private init() {}
+
+    /// Switch the log destination to a specific file under `Documents/logs/`.
+    /// Used by automation runs (`--auto-play`) so each scenario writes to a
+    /// dedicated, predictable file the runner can poll without parsing the
+    /// shared daily log. The file is truncated on switch.
+    func switchToFile(named name: String) {
+        stateLock.lock()
+        _customFileName = name
+        stateLock.unlock()
+        let url = Self.logsDirectory.appendingPathComponent(name)
+        try? Data().write(to: url, options: .atomic)
+    }
 
     @discardableResult
     func log(_ level: LogLevel,
@@ -45,8 +59,15 @@ final class AppLog {
         return line
     }
 
-    /// Path to today's log file (creates parent directory if needed).
+    /// Path to the active log file. If `switchToFile(named:)` was called,
+    /// returns that custom path; otherwise the daily file `yyyy-MM-dd.log`.
     func todayURL() -> URL {
+        stateLock.lock()
+        let custom = _customFileName
+        stateLock.unlock()
+        if let name = custom {
+            return Self.logsDirectory.appendingPathComponent(name)
+        }
         let day = DateFormatter.applogDay.string(from: Date())
         return Self.logsDirectory.appendingPathComponent("\(day).log")
     }
