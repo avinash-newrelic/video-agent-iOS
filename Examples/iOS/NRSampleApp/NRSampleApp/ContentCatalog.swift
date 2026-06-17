@@ -1,7 +1,11 @@
 import Foundation
 
-/// Hard-coded catalog of public test streams. In a real app, this would be
-/// loaded from a backend service.
+/// Hard-coded catalog of public test streams that work with iOS App Transport
+/// Security defaults (Apple/Akamai/Google CDNs with widely-trusted certs).
+///
+/// Bitmovin/Akamai-hosted streams are intentionally excluded: their current
+/// Cloudflare-managed certificate chain isn't trusted by stock iOS, so
+/// playback fails with NSURLErrorDomain Code=-1200.
 enum ContentCatalog {
 
     static let items: [ContentItem] = [
@@ -9,7 +13,7 @@ enum ContentCatalog {
         ContentItem(
             id: "bipbop-adv",
             title: "Apple BipBop",
-            subtitle: "HLS adaptive bitrate reference stream",
+            subtitle: "HLS adaptive bitrate · iOS reference stream",
             posterURL: nil,
             streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
             durationSecs: 600,
@@ -31,32 +35,22 @@ enum ContentCatalog {
 
         // ON DEMAND
         ContentItem(
-            id: "sintel",
-            title: "Sintel",
-            subtitle: "Open movie · Blender Foundation",
-            posterURL: nil,
-            streamURL: URL(string: "https://bitmovin-a.akamaihd.net/content/sintel/hls/playlist.m3u8")!,
-            durationSecs: 888,
-            isLive: false,
-            section: .vod
-        ),
-        ContentItem(
-            id: "tears-of-steel",
-            title: "Tears of Steel",
-            subtitle: "Open movie · Blender Foundation",
-            posterURL: nil,
-            streamURL: URL(string: "https://bitmovin-a.akamaihd.net/content/tears-of-steel/m3u8s/tears-of-steel.m3u8")!,
-            durationSecs: 730,
-            isLive: false,
-            section: .vod
-        ),
-        ContentItem(
             id: "big-buck-bunny",
             title: "Big Buck Bunny",
-            subtitle: "Progressive MP4 · 720p",
+            subtitle: "Progressive MP4 · 720p · open movie",
             posterURL: nil,
             streamURL: URL(string: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4")!,
             durationSecs: 596,
+            isLive: false,
+            section: .vod
+        ),
+        ContentItem(
+            id: "bipbop-basic",
+            title: "BipBop Basic",
+            subtitle: "HLS · single bitrate variant",
+            posterURL: nil,
+            streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8")!,
+            durationSecs: 60,
             isLive: false,
             section: .vod
         ),

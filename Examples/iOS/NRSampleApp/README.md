@@ -1,13 +1,12 @@
 # NRSampleApp
 
-Modern iOS reference app for the **New Relic Video Agent**. SwiftUI, iOS 15+, AVPlayer-based playback. Demonstrates how to wire the agent into a real video app using public test streams.
+Modern iOS video sample app. SwiftUI, iOS 15+, AVPlayer-based playback. Catalog of public test streams. **Pure AVKit — no third-party dependencies.**
 
-This app lives only on the `internal/video-rig` branch and is not merged to `master`.
+This app lives only on the `internal/video-rig` branch.
 
 ## Requirements
 
 - macOS, Xcode 15+
-- CocoaPods
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) — `brew install xcodegen`
 
 ## Quick start
@@ -15,47 +14,47 @@ This app lives only on the `internal/video-rig` branch and is not merged to `mas
 ```bash
 cd Examples/iOS/NRSampleApp
 xcodegen generate          # produces NRSampleApp.xcodeproj
-pod install                # produces NRSampleApp.xcworkspace
-open NRSampleApp.xcworkspace
+open NRSampleApp.xcodeproj
 ```
 
-Set `NEW_RELIC_APP_TOKEN` in the Xcode scheme's Environment Variables before running. Then build and run the `NRSampleApp` scheme.
+Build and run the `NRSampleApp` scheme.
 
 ## What's in the app
 
-A catalog of public test streams across HLS VOD, HLS Live, and progressive MP4. Tap a card to open the player. Each playback session is tracked by NRVA via `NewRelicSetup.addAVPlayer(...)`.
+A catalog of public test streams that all work with iOS App Transport Security defaults:
 
 ```
 Watch
-├── Featured       Apple BipBop (hero card)
+├── Featured       Apple BipBop (HLS adaptive)
 ├── Live           Akamai 24/7 test stream
-└── On Demand      Sintel · Tears of Steel · Big Buck Bunny
+└── On Demand      Big Buck Bunny (MP4) · BipBop Basic (HLS)
 ```
+
+Tap a card → full-bleed `VideoPlayer` (AVKit). Native controls, AirPlay, scrub, captions all work out of the box.
 
 ## Files
 
 ```
 NRSampleApp/
 ├── project.yml                  XcodeGen source of truth (.xcodeproj is generated, gitignored)
-├── Podfile                      References the local agent via :path
 └── NRSampleApp/
-    ├── NRSampleAppApp.swift     @main entry — calls NewRelicSetup.start()
-    ├── NewRelicSetup.swift      ★ canonical NRVA wiring — copy this verbatim
+    ├── NRSampleAppApp.swift     @main entry
     ├── ContentItem.swift        Codable model for a streamable item
-    ├── ContentCatalog.swift     Hard-coded catalog of public test streams
+    ├── ContentCatalog.swift     Hard-coded catalog of public streams
     ├── HomeView.swift           Catalog screen with hero + horizontal sections
     ├── CardView.swift           Reusable card with gradient placeholder
-    └── PlayerView.swift         Full-bleed AVKit player + NRVA tracking
+    └── PlayerView.swift         Full-bleed AVKit player
 ```
 
 ## Adding a new content item
 
-1. Append a `ContentItem` to `ContentCatalog.items`.
-2. Choose its `section` (`.featured` / `.live` / `.vod`).
-3. Run.
+Append a `ContentItem` to `ContentCatalog.items`, choose its `section`, run.
 
-## Notes
+## Stream selection notes
 
-- All streams are public. Replace with your own when integrating into a real app.
-- Poster art uses generated gradients; supply a `posterURL` to use a real thumbnail.
-- The Podfile uses `:path => '../../../'` so any change to the agent's source is picked up by the next `pod install`.
+iOS's default App Transport Security only accepts streams hosted on CAs in
+the system trust store. Some popular public test streams (Bitmovin /
+older Akamai endpoints) now use Cloudflare-managed certificates which
+fail with `NSURLErrorDomain -1200`. The catalog only includes streams
+that Just Work: Apple's `devstreaming-cdn.apple.com`, Google's
+`commondatastorage.googleapis.com`, and Akamai's `cph-p2p-msl.akamaized.net`.
