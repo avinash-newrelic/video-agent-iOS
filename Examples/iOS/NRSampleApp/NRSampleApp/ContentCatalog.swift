@@ -37,9 +37,9 @@ enum ContentCatalog {
         ContentItem(
             id: "big-buck-bunny",
             title: "Big Buck Bunny",
-            subtitle: "Progressive MP4 · 720p · open movie",
+            subtitle: "Progressive H.264 · 720p · open movie (Blender)",
             posterURL: nil,
-            streamURL: URL(string: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4")!,
+            streamURL: URL(string: "https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_720p_h264.mov")!,
             durationSecs: 596,
             isLive: false,
             section: .vod
