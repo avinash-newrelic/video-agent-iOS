@@ -15,7 +15,8 @@ name: video-playback
 
 on:
   schedule:
-    - cron: '17 */6 * * *'
+    - cron: '17 6 * * *'      # daily comprehensive — 06:17 UTC every day
+    - cron: '17 */6 * * *'    # smoke every 6h — 00:17 / 06:17 / 12:17 / 18:17 UTC
 
   workflow_dispatch:
     inputs:

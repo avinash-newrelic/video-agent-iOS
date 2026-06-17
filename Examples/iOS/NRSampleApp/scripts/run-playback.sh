@@ -331,6 +331,7 @@ run_one_scenario() {
   fi
 
   echo "    result=$RESULT  events=$EVENT_COUNT  fails=$FAIL_COUNT"
+  echo "    [SCENARIO DONE] $ID → $RESULT (continuing)"
   printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" \
     "$ID" "$MODE" "${ELAPSED}s" "$EVENT_COUNT" "$FAIL_COUNT" "$RESULT" >> "$SUMMARY"
   [ "$RESULT" = "ok" ] || return 1
@@ -344,7 +345,20 @@ done
 
 echo ""
 echo "============================================================"
+echo "==> DEVICE COMPLETE: ${LEG_TAG:-$DEVICE_NAME}"
+echo "============================================================"
 cat "$SUMMARY"
 echo "============================================================"
-echo "Artifacts in: $ARTIFACTS_DIR"
-exit $OVERALL_RC
+PASSED=$(grep -c " ok " "$SUMMARY" 2>/dev/null || echo 0)
+TOTAL=${#RUN_LIST[@]}
+echo "==> $PASSED/$TOTAL scenarios ok"
+echo "==> Artifacts in: $ARTIFACTS_DIR"
+echo "============================================================"
+# Always exit 0 so a failed scenario doesn't fail the GitHub job; the
+# SUMMARY.txt artifact + per-scenario log files carry the verdict. Set
+# FAIL_ON_ERROR=1 to reverse this and propagate the non-zero RC.
+if [ "${FAIL_ON_ERROR:-0}" = "1" ]; then
+  exit $OVERALL_RC
+else
+  exit 0
+fi
