@@ -1,28 +1,68 @@
 name: video-playback
 
-# Runs NRSampleApp playback automation across iOS + tvOS simulators in parallel.
-# Five matrix legs: iOS 18 (iPhone 17 Pro + 16 Pro), iOS 17 (iPhone 15),
-# iOS 16 (iPhone 14, runtime downloaded at CI time), tvOS 18 (Apple TV 4K).
+# Runs NRSampleApp playback automation across iOS + tvOS simulators.
 #
-# Each scenario plays for its declared duration. Live scenarios run 30 minutes;
-# VOD scenarios run 60s of real playback. Per-scenario logs and a mid-playback
-# screenshot are uploaded as artifacts.
+# Layered config — change a setting WITHOUT a PR by editing GitHub Actions
+# variables (Settings → Secrets and variables → Actions → Variables tab).
+# Priority high → low:
+#   1. workflow_dispatch inputs (nr_overrides, extra_streams)
+#   2. GitHub repo vars.NEW_RELIC_*
+#   3. playback-config.json per_leg block (matched by leg tag)
+#   4. playback-config.json global block
+#   5. NewRelicSetup.swift defaults
 #
 # This workflow lives only on `internal/video-rig` and is not merged to master.
 
 on:
   schedule:
-    - cron: '17 */6 * * *'   # every 6 hours
+    - cron: '17 */6 * * *'
+
   workflow_dispatch:
     inputs:
       scenarios:
-        description: 'Comma-separated subset (e.g., bipbop-adv,akamai-live). Empty = all.'
+        description: 'Scenario subset (comma-separated). Empty = all.'
         required: false
         default: ''
-      matrix_filter:
-        description: 'Filter matrix legs by tag substring (e.g., "tvOS", "iOS-16"). Empty = all.'
+
+      # ------ Per-leg toggles ------
+      run_iOS_18_iPhone_17_Pro:
+        description: 'Run iOS 18 / iPhone 17 Pro'
+        type: boolean
+        default: true
+      run_iOS_18_iPhone_16_Pro:
+        description: 'Run iOS 18 / iPhone 16 Pro'
+        type: boolean
+        default: true
+      run_iOS_17_iPhone_15:
+        description: 'Run iOS 17.5 / iPhone 15'
+        type: boolean
+        default: true
+      run_iOS_16_iPhone_14:
+        description: 'Run iOS 16.4 / iPhone 14 (downloads runtime, +10 min)'
+        type: boolean
+        default: false
+      run_tvOS_18_Apple_TV_4K:
+        description: 'Run tvOS 18 / Apple TV 4K'
+        type: boolean
+        default: true
+
+      # ------ Per-run NRVA overrides ------
+      nr_overrides:
+        description: 'NRVA per-run JSON override, e.g. {"harvest_cycle_secs":60,"debug_logging":false}'
+        required: false
+        default: '{}'
+
+      # ------ Per-run extra streams (ContentItem JSON array) ------
+      extra_streams:
+        description: 'Extra ContentItems (JSON array). Empty = none.'
         required: false
         default: ''
+
+      config_file:
+        description: 'Path to playback-config.json (relative to NRSampleApp dir)'
+        required: false
+        default: 'playback-config.json'
+
   push:
     branches: [internal/video-rig]
     paths:
@@ -36,23 +76,31 @@ concurrency:
   group: video-playback-${{ github.ref }}
   cancel-in-progress: true
 
+# Defaults for cron + push (no inputs available there).
+env:
+  CRON_DEFAULT_iOS_18_iPhone_17_Pro: 'true'
+  CRON_DEFAULT_iOS_18_iPhone_16_Pro: 'true'
+  CRON_DEFAULT_iOS_17_iPhone_15:     'true'
+  CRON_DEFAULT_iOS_16_iPhone_14:     'false'
+  CRON_DEFAULT_tvOS_18_Apple_TV_4K:  'true'
+
 jobs:
   playback:
     name: ${{ matrix.tag }}
     runs-on: macos-14
-    timeout-minutes: 120   # play-to-end VODs + 30 min live + iOS 16 runtime download
+    timeout-minutes: 120
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Pre-installed runtimes (no download needed)
           - tag: iOS-18-iPhone-17-Pro
             platform: iOS
             scheme: NRSampleApp_iOS
             device: iPhone 17 Pro
             os_version: ""
             download_os: ""
+            input_key: run_iOS_18_iPhone_17_Pro
 
           - tag: iOS-18-iPhone-16-Pro
             platform: iOS
@@ -60,6 +108,7 @@ jobs:
             device: iPhone 16 Pro
             os_version: ""
             download_os: ""
+            input_key: run_iOS_18_iPhone_16_Pro
 
           - tag: iOS-17-iPhone-15
             platform: iOS
@@ -67,14 +116,15 @@ jobs:
             device: iPhone 15
             os_version: "17.5"
             download_os: ""
+            input_key: run_iOS_17_iPhone_15
 
-          # Older runtime — needs download (~10 min)
           - tag: iOS-16-iPhone-14
             platform: iOS
             scheme: NRSampleApp_iOS
             device: iPhone 14
             os_version: "16.4"
             download_os: "16.4"
+            input_key: run_iOS_16_iPhone_14
 
           - tag: tvOS-18-Apple-TV-4K
             platform: tvOS
@@ -82,76 +132,106 @@ jobs:
             device: Apple TV 4K (3rd generation)
             os_version: ""
             download_os: ""
+            input_key: run_tvOS_18_Apple_TV_4K
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Skip if not in matrix_filter
-        if: inputs.matrix_filter != '' && !contains(matrix.tag, inputs.matrix_filter)
+      - name: Resolve whether this leg should run
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_iOS_18_iPhone_17_Pro: ${{ inputs.run_iOS_18_iPhone_17_Pro }}
+          INPUT_iOS_18_iPhone_16_Pro: ${{ inputs.run_iOS_18_iPhone_16_Pro }}
+          INPUT_iOS_17_iPhone_15:     ${{ inputs.run_iOS_17_iPhone_15 }}
+          INPUT_iOS_16_iPhone_14:     ${{ inputs.run_iOS_16_iPhone_14 }}
+          INPUT_tvOS_18_Apple_TV_4K:  ${{ inputs.run_tvOS_18_Apple_TV_4K }}
+          KEY: ${{ matrix.input_key }}
         run: |
-          echo "Matrix filter '${{ inputs.matrix_filter }}' excludes '${{ matrix.tag }}' — skipping."
-          # Don't fail; just exit cleanly. The artifact upload step is `if: always()`.
-        continue-on-error: true
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VAR_NAME="INPUT_${KEY#run_}"
+          else
+            VAR_NAME="CRON_DEFAULT_${KEY#run_}"
+          fi
+          VAL=$(eval echo "\${$VAR_NAME:-true}")
+          case "$VAL" in
+            true|1|yes) SHOULD_RUN=true ;;
+            *)          SHOULD_RUN=false ;;
+          esac
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+          echo "Leg ${{ matrix.tag }} → $SHOULD_RUN (event=$EVENT_NAME)"
 
-      - name: Install XcodeGen
-        if: inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter)
-        run: brew install xcodegen
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.should_run == 'true'
+
+      - name: Install XcodeGen + jq
+        if: steps.gate.outputs.should_run == 'true'
+        run: brew install xcodegen jq
 
       - name: Show pre-installed simulator runtimes
-        if: inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter)
+        if: steps.gate.outputs.should_run == 'true'
         run: xcrun simctl list runtimes
 
       - name: Download iOS runtime ${{ matrix.download_os }}
-        if: matrix.download_os != '' && (inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter))
+        if: steps.gate.outputs.should_run == 'true' && matrix.download_os != ''
         run: |
           set -euxo pipefail
-          echo "Downloading iOS ${{ matrix.download_os }} simulator runtime..."
-          # Xcode 16+ supports this directly. Falls back to non-sudo if the
-          # runner's Xcode permits it.
           sudo xcodebuild -downloadPlatform iOS -buildVersion ${{ matrix.download_os }} \
             || xcodebuild -downloadPlatform iOS -buildVersion ${{ matrix.download_os }}
-          xcrun simctl list runtimes | grep -i "iOS ${{ matrix.download_os }}" || {
-            echo "ERROR: runtime did not install"; exit 1;
-          }
+          xcrun simctl list runtimes | grep -i "iOS ${{ matrix.download_os }}" \
+            || { echo "ERROR: runtime did not install"; exit 1; }
 
       - name: Create simulator for ${{ matrix.tag }}
-        if: matrix.os_version != '' && (inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter))
+        if: steps.gate.outputs.should_run == 'true' && matrix.os_version != ''
         run: |
           set -euxo pipefail
-          # Build runtime identifier: iOS-17-5, iOS-16-4, etc.
           RUNTIME_ID="iOS-${{ matrix.os_version }}"
           RUNTIME_ID="${RUNTIME_ID//./-}"
-          # Create the device. If it already exists (from a previous run on
-          # the same physical runner — unlikely but possible), simctl errors;
-          # we ignore that and continue.
           xcrun simctl create "auto-${{ matrix.tag }}" "${{ matrix.device }}" "$RUNTIME_ID" \
             || echo "(device may already exist — continuing)"
-          xcrun simctl list devices "auto-${{ matrix.tag }}"
 
       - name: Run playback automation
-        if: inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter)
+        if: steps.gate.outputs.should_run == 'true'
         working-directory: Examples/iOS/NRSampleApp
         env:
-          SCENARIOS: ${{ inputs.scenarios }}
-          PLATFORM: ${{ matrix.platform }}
-          SCHEME: ${{ matrix.scheme }}
-          # When os_version is set, we created a custom device "auto-<tag>".
-          # When it's empty, the script uses the matrix.device name as-is.
+          SCENARIOS:    ${{ inputs.scenarios }}
+          PLATFORM:     ${{ matrix.platform }}
+          SCHEME:       ${{ matrix.scheme }}
           DEVICE_NAME: >-
             ${{ matrix.os_version != ''
                 && format('auto-{0}', matrix.tag)
                 || matrix.device }}
-          OS_VERSION: ${{ matrix.os_version }}
-          # NewRelic config — set as repo secrets:
-          #   NEW_RELIC_APP_TOKEN          (required to send events)
-          #   NEW_RELIC_COLLECTOR_ADDRESS  (optional; e.g.
-          #                                'staging-mobile-collector.newrelic.com')
+          OS_VERSION:   ${{ matrix.os_version }}
+          LEG_TAG:      ${{ matrix.tag }}
+          CONFIG_FILE:  ${{ inputs.config_file || 'playback-config.json' }}
+
+          # ------ Sensitive (always from secrets) ------
           NEW_RELIC_APP_TOKEN: ${{ secrets.NEW_RELIC_APP_TOKEN }}
-          NEW_RELIC_COLLECTOR_ADDRESS: ${{ secrets.NEW_RELIC_COLLECTOR_ADDRESS }}
+
+          # ------ Non-sensitive NRVA settings (from repo vars; edit in GitHub UI, no PR) ------
+          NEW_RELIC_COLLECTOR_ADDRESS:        ${{ vars.NEW_RELIC_COLLECTOR_ADDRESS }}
+          NEW_RELIC_HARVEST_CYCLE_SECS:       ${{ vars.NEW_RELIC_HARVEST_CYCLE_SECS }}
+          NEW_RELIC_LIVE_HARVEST_CYCLE_SECS:  ${{ vars.NEW_RELIC_LIVE_HARVEST_CYCLE_SECS }}
+          NEW_RELIC_REGULAR_BATCH_SIZE_BYTES: ${{ vars.NEW_RELIC_REGULAR_BATCH_SIZE_BYTES }}
+          NEW_RELIC_LIVE_BATCH_SIZE_BYTES:    ${{ vars.NEW_RELIC_LIVE_BATCH_SIZE_BYTES }}
+          NEW_RELIC_MAX_DEAD_LETTER_SIZE:     ${{ vars.NEW_RELIC_MAX_DEAD_LETTER_SIZE }}
+          NEW_RELIC_MAX_OFFLINE_STORAGE_MB:   ${{ vars.NEW_RELIC_MAX_OFFLINE_STORAGE_MB }}
+          NEW_RELIC_QOE_ENABLED:              ${{ vars.NEW_RELIC_QOE_ENABLED }}
+          NEW_RELIC_QOE_INTERVAL_MULTIPLIER:  ${{ vars.NEW_RELIC_QOE_INTERVAL_MULTIPLIER }}
+          NEW_RELIC_DEBUG_LOGGING:            ${{ vars.NEW_RELIC_DEBUG_LOGGING }}
+          NEW_RELIC_MEMORY_OPTIMIZATION:      ${{ vars.NEW_RELIC_MEMORY_OPTIMIZATION }}
+
+          # ------ Per-run overrides (workflow_dispatch only) ------
+          NR_OVERRIDES_JSON:                  ${{ inputs.nr_overrides }}
+
+          # ------ Extra streams: input wins, fallback to repo var ------
+          PLAYBACK_EXTRA_STREAMS: >-
+            ${{ inputs.extra_streams != ''
+                && inputs.extra_streams
+                || vars.PLAYBACK_EXTRA_STREAMS }}
         run: ./scripts/run-playback.sh
 
       - name: Upload artifacts
-        if: always() && (inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter))
+        if: always() && steps.gate.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: playback-${{ matrix.tag }}-${{ github.run_id }}

@@ -2,42 +2,40 @@
 #
 # run-playback.sh — automation for the NRSampleApp catalog.
 #
-# Builds the app, boots a simulator, and plays each catalog item for a
-# fixed wall-clock duration declared per scenario. Durations are explicit
-# because Apple's HLS reference streams (BipBop) are 30+ minutes long —
-# "play to natural end" makes daily runs absurd.
+# Builds the app, boots a simulator, and plays every catalog item:
+#   - VOD: plays to natural didPlayToEnd (capped at VOD_SAFETY_CAP secs)
+#   - Live: plays for a configured wall-clock duration
 #
-# This is REAL playback — AVKit's `VideoPlayer` decodes and renders the
-# stream in the simulator. The simulator window stays focused so a human
-# can watch / hear it. A mid-playback screenshot is captured per scenario
-# as artifact proof of actual rendering.
-#
-# Designed to run identically on a developer's laptop and on GitHub Actions.
+# Real AVKit playback. Simulator window stays focused. Mid-playback
+# screenshot per scenario. Per-scenario log file copied to artifacts.
 #
 # Usage:
-#   ./scripts/run-playback.sh                                                  # iOS, default device
-#   PLATFORM=tvOS ./scripts/run-playback.sh                                    # tvOS
-#   PLATFORM=iOS DEVICE_NAME='iPhone 15' OS_VERSION=17.5 ./scripts/run-playback.sh
-#   SCENARIOS=bipbop-adv,akamai-live ./scripts/run-playback.sh                 # subset
+#   ./scripts/run-playback.sh
+#   PLATFORM=tvOS ./scripts/run-playback.sh
+#   SCENARIOS=bipbop-basic ./scripts/run-playback.sh
 #
-# Environment overrides:
-#   PLATFORM          'iOS' (default) or 'tvOS'
-#   DEVICE_NAME       Simulator name (default: "iPhone 16 Pro" for iOS,
-#                     "Apple TV 4K (3rd generation)" for tvOS)
-#   OS_VERSION        Simulator OS version (default: latest available)
-#   SCHEME            Xcode scheme (default: NRSampleApp_<platform>)
-#   ARTIFACTS_DIR     Where to write artifacts (default: build/playback-artifacts)
-#   DERIVED_DATA      DerivedData path (default: build)
+# CI sets these inside each matrix leg:
+#   PLATFORM, SCHEME, DEVICE_NAME, OS_VERSION, LEG_TAG
+#
+# All NRVA settings are forwarded to the simulator launchd as env vars,
+# read by NewRelicSetup at app launch. Layered config (high → low):
+#   1. NR_OVERRIDES_JSON (workflow_dispatch input)
+#   2. NEW_RELIC_* env vars (GitHub vars.* / secrets.* in workflow)
+#   3. playback-config.json per_leg block (matched by LEG_TAG)
+#   4. playback-config.json global block
+#   5. defaults below
 #
 
 set -euo pipefail
-
-# Run from the NRSampleApp directory regardless of where this is invoked.
 cd "$(dirname "$0")/.."
+
+# ---- Platform + simulator resolution ---------------------------------------
 
 PLATFORM="${PLATFORM:-iOS}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-build/playback-artifacts}"
 DERIVED_DATA="${DERIVED_DATA:-build}"
+CONFIG_FILE="${CONFIG_FILE:-playback-config.json}"
+LEG_TAG="${LEG_TAG:-}"
 
 case "$PLATFORM" in
   iOS)
@@ -54,10 +52,7 @@ case "$PLATFORM" in
     APP_BUNDLE_ID="com.newrelic.video.sample.NRSampleApp.tvOS"
     DEFAULT_SCHEME="NRSampleApp_tvOS"
     ;;
-  *)
-    echo "ERROR: PLATFORM must be 'iOS' or 'tvOS' (got: $PLATFORM)"
-    exit 1
-    ;;
+  *) echo "ERROR: PLATFORM must be 'iOS' or 'tvOS' (got: $PLATFORM)"; exit 1 ;;
 esac
 
 DEVICE_NAME="${DEVICE_NAME:-$DEFAULT_DEVICE}"
@@ -65,13 +60,104 @@ SCHEME="${SCHEME:-$DEFAULT_SCHEME}"
 OS_VERSION="${OS_VERSION:-}"
 APP_PATH="$DERIVED_DATA/Build/Products/$BUILD_PRODUCTS_DIR/NRSampleApp.app"
 
-# Default scenarios — id:mode where mode is one of:
-#   end       — play to natural didPlayToEnd; safety cap = VOD_SAFETY_CAP secs
-#   end=N     — play to natural end; safety cap = N secs
-#   fixed=N   — play exactly N seconds (used for live streams that never end)
-# Order: shorter VODs first (fast feedback), then live last.
-VOD_SAFETY_CAP=3600   # 60 min cap so a hung stream doesn't stall CI forever
+# ---- Layered NRVA config merge --------------------------------------------
 
+# Layer 5: hard-coded defaults
+NR_HARVEST=10
+NR_LIVE_HARVEST=10
+NR_REG_BATCH=65536
+NR_LIVE_BATCH=32768
+NR_DEAD_LETTER=100
+NR_OFFLINE_MB=10
+NR_QOE_ENABLED=true
+NR_QOE_MULT=2
+NR_DEBUG=true
+NR_MEM_OPT=false
+NR_COLLECTOR=""
+NR_EXTRA_STREAMS=""
+
+read_jq() {           # read_jq <path-expression> <var>
+  local val
+  val=$(jq -r "$1 // empty" "$CONFIG_FILE" 2>/dev/null || true)
+  [ -n "$val" ] && eval "$2=\"\$val\""
+}
+
+if [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
+  echo "==> Reading $CONFIG_FILE"
+  # Layer 4: global
+  read_jq '.global.harvest_cycle_secs'        NR_HARVEST
+  read_jq '.global.live_harvest_cycle_secs'   NR_LIVE_HARVEST
+  read_jq '.global.regular_batch_size_bytes'  NR_REG_BATCH
+  read_jq '.global.live_batch_size_bytes'     NR_LIVE_BATCH
+  read_jq '.global.max_dead_letter_size'      NR_DEAD_LETTER
+  read_jq '.global.max_offline_storage_mb'    NR_OFFLINE_MB
+  read_jq '.global.qoe_enabled'               NR_QOE_ENABLED
+  read_jq '.global.qoe_interval_multiplier'   NR_QOE_MULT
+  read_jq '.global.debug_logging'             NR_DEBUG
+  read_jq '.global.memory_optimization'       NR_MEM_OPT
+  read_jq '.global.collector_address'         NR_COLLECTOR
+  # Layer 3: per_leg
+  if [ -n "$LEG_TAG" ]; then
+    read_jq ".per_leg[\"$LEG_TAG\"].harvest_cycle_secs"        NR_HARVEST
+    read_jq ".per_leg[\"$LEG_TAG\"].live_harvest_cycle_secs"   NR_LIVE_HARVEST
+    read_jq ".per_leg[\"$LEG_TAG\"].regular_batch_size_bytes"  NR_REG_BATCH
+    read_jq ".per_leg[\"$LEG_TAG\"].live_batch_size_bytes"     NR_LIVE_BATCH
+    read_jq ".per_leg[\"$LEG_TAG\"].max_dead_letter_size"      NR_DEAD_LETTER
+    read_jq ".per_leg[\"$LEG_TAG\"].max_offline_storage_mb"    NR_OFFLINE_MB
+    read_jq ".per_leg[\"$LEG_TAG\"].qoe_enabled"               NR_QOE_ENABLED
+    read_jq ".per_leg[\"$LEG_TAG\"].qoe_interval_multiplier"   NR_QOE_MULT
+    read_jq ".per_leg[\"$LEG_TAG\"].debug_logging"             NR_DEBUG
+    read_jq ".per_leg[\"$LEG_TAG\"].memory_optimization"       NR_MEM_OPT
+    read_jq ".per_leg[\"$LEG_TAG\"].collector_address"         NR_COLLECTOR
+  fi
+fi
+
+# Layer 2: env vars (set by GitHub vars.* / local exports)
+[ -n "${NEW_RELIC_HARVEST_CYCLE_SECS:-}" ]       && NR_HARVEST="$NEW_RELIC_HARVEST_CYCLE_SECS"
+[ -n "${NEW_RELIC_LIVE_HARVEST_CYCLE_SECS:-}" ]  && NR_LIVE_HARVEST="$NEW_RELIC_LIVE_HARVEST_CYCLE_SECS"
+[ -n "${NEW_RELIC_REGULAR_BATCH_SIZE_BYTES:-}" ] && NR_REG_BATCH="$NEW_RELIC_REGULAR_BATCH_SIZE_BYTES"
+[ -n "${NEW_RELIC_LIVE_BATCH_SIZE_BYTES:-}" ]    && NR_LIVE_BATCH="$NEW_RELIC_LIVE_BATCH_SIZE_BYTES"
+[ -n "${NEW_RELIC_MAX_DEAD_LETTER_SIZE:-}" ]     && NR_DEAD_LETTER="$NEW_RELIC_MAX_DEAD_LETTER_SIZE"
+[ -n "${NEW_RELIC_MAX_OFFLINE_STORAGE_MB:-}" ]   && NR_OFFLINE_MB="$NEW_RELIC_MAX_OFFLINE_STORAGE_MB"
+[ -n "${NEW_RELIC_QOE_ENABLED:-}" ]              && NR_QOE_ENABLED="$NEW_RELIC_QOE_ENABLED"
+[ -n "${NEW_RELIC_QOE_INTERVAL_MULTIPLIER:-}" ]  && NR_QOE_MULT="$NEW_RELIC_QOE_INTERVAL_MULTIPLIER"
+[ -n "${NEW_RELIC_DEBUG_LOGGING:-}" ]            && NR_DEBUG="$NEW_RELIC_DEBUG_LOGGING"
+[ -n "${NEW_RELIC_MEMORY_OPTIMIZATION:-}" ]      && NR_MEM_OPT="$NEW_RELIC_MEMORY_OPTIMIZATION"
+[ -n "${NEW_RELIC_COLLECTOR_ADDRESS:-}" ]        && NR_COLLECTOR="$NEW_RELIC_COLLECTOR_ADDRESS"
+[ -n "${PLAYBACK_EXTRA_STREAMS:-}" ]             && NR_EXTRA_STREAMS="$PLAYBACK_EXTRA_STREAMS"
+
+# Layer 1: nr_overrides JSON from workflow_dispatch
+if [ -n "${NR_OVERRIDES_JSON:-}" ] && [ "$NR_OVERRIDES_JSON" != "{}" ] && command -v jq >/dev/null 2>&1; then
+  read_override() {
+    local val
+    val=$(echo "$NR_OVERRIDES_JSON" | jq -r ".$1 // empty" 2>/dev/null || true)
+    [ -n "$val" ] && eval "$2=\"\$val\""
+  }
+  read_override harvest_cycle_secs        NR_HARVEST
+  read_override live_harvest_cycle_secs   NR_LIVE_HARVEST
+  read_override regular_batch_size_bytes  NR_REG_BATCH
+  read_override live_batch_size_bytes     NR_LIVE_BATCH
+  read_override max_dead_letter_size      NR_DEAD_LETTER
+  read_override max_offline_storage_mb    NR_OFFLINE_MB
+  read_override qoe_enabled               NR_QOE_ENABLED
+  read_override qoe_interval_multiplier   NR_QOE_MULT
+  read_override debug_logging             NR_DEBUG
+  read_override memory_optimization       NR_MEM_OPT
+  read_override collector_address         NR_COLLECTOR
+fi
+
+echo "==> NRVA config (resolved):"
+echo "    harvest=${NR_HARVEST}s  liveHarvest=${NR_LIVE_HARVEST}s"
+echo "    regBatch=${NR_REG_BATCH}B  liveBatch=${NR_LIVE_BATCH}B"
+echo "    deadLetter=${NR_DEAD_LETTER}  offlineMB=${NR_OFFLINE_MB}"
+echo "    qoe=${NR_QOE_ENABLED}×${NR_QOE_MULT}  debug=${NR_DEBUG}  memOpt=${NR_MEM_OPT}"
+echo "    collector=${NR_COLLECTOR:-(default)}"
+echo "    extraStreams=${NR_EXTRA_STREAMS:+(set, $(echo "$NR_EXTRA_STREAMS" | head -c 60)...)}"
+echo "    extraStreams=${NR_EXTRA_STREAMS:-(none)}"
+
+# ---- Scenarios -------------------------------------------------------------
+
+VOD_SAFETY_CAP=3600
 DEFAULT_SCENARIOS=(
   "bipbop-adv:end"
   "bipbop-basic:end"
@@ -79,20 +165,13 @@ DEFAULT_SCENARIOS=(
   "akamai-live:fixed=1800"
 )
 
-# Optional subset via SCENARIOS=foo,bar
 if [ -n "${SCENARIOS:-}" ]; then
   IFS=',' read -ra SELECTED <<< "$SCENARIOS"
   declare -a RUN_LIST=()
   for sel in "${SELECTED[@]}"; do
-    found=0
     for s in "${DEFAULT_SCENARIOS[@]}"; do
-      if [[ "$s" == "$sel:"* ]]; then
-        RUN_LIST+=("$s")
-        found=1
-        break
-      fi
+      [[ "$s" == "$sel:"* ]] && RUN_LIST+=("$s")
     done
-    [ $found -eq 0 ] && echo "WARN: scenario '$sel' not found — ignored"
   done
   [ ${#RUN_LIST[@]} -eq 0 ] && { echo "ERROR: SCENARIOS filter matched nothing"; exit 1; }
 else
@@ -101,41 +180,31 @@ fi
 
 mkdir -p "$ARTIFACTS_DIR"
 
-echo "==> Generating Xcode project"
+# ---- Build -----------------------------------------------------------------
+
+echo "==> xcodegen generate"
 xcodegen generate
 
 echo "==> Resolving simulator: $DEVICE_NAME ($PLATFORM${OS_VERSION:+, OS=$OS_VERSION})"
 DEVICE_LINE=$(xcrun simctl list devices "$DEVICE_NAME" available | grep -m1 "$DEVICE_NAME" || true)
 if [ -z "$DEVICE_LINE" ]; then
   echo "ERROR: no simulator named '$DEVICE_NAME' available"
-  echo "Available:"
   xcrun simctl list devices available
   exit 1
 fi
 DEVICE_ID=$(echo "$DEVICE_LINE" | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
 echo "    $DEVICE_ID"
 
-# xcodebuild destination string
-if [ -n "$OS_VERSION" ]; then
-  DESTINATION="platform=$DESTINATION_PLATFORM,name=$DEVICE_NAME,OS=$OS_VERSION"
-else
-  DESTINATION="platform=$DESTINATION_PLATFORM,name=$DEVICE_NAME"
-fi
-
-echo "==> Booting simulator (no-op if already booted)"
 xcrun simctl boot "$DEVICE_ID" 2>/dev/null || true
 xcrun simctl bootstatus "$DEVICE_ID" -b
-# Bring the simulator window forward so a human can watch playback.
 open -a Simulator || true
 
 echo "==> pod install"
 pod install --repo-update > "$ARTIFACTS_DIR/pod-install.log" 2>&1 || {
-  echo "pod install failed:"
-  tail -30 "$ARTIFACTS_DIR/pod-install.log"
-  exit 1
+  echo "pod install failed:"; tail -30 "$ARTIFACTS_DIR/pod-install.log"; exit 1;
 }
 
-echo "==> Building $SCHEME (workspace)"
+echo "==> Building $SCHEME"
 xcodebuild build \
   -workspace NRSampleApp.xcworkspace \
   -scheme "$SCHEME" \
@@ -144,17 +213,13 @@ xcodebuild build \
   -derivedDataPath "$DERIVED_DATA" \
   CODE_SIGNING_ALLOWED=NO \
   > "$ARTIFACTS_DIR/build.log" 2>&1
-if [ ! -d "$APP_PATH" ]; then
-  echo "ERROR: build did not produce $APP_PATH"
-  tail -40 "$ARTIFACTS_DIR/build.log"
-  exit 1
-fi
-echo "    built: $APP_PATH"
+[ -d "$APP_PATH" ] || { echo "ERROR: build did not produce $APP_PATH"; tail -40 "$ARTIFACTS_DIR/build.log"; exit 1; }
 
 echo "==> Installing app"
 xcrun simctl install "$DEVICE_ID" "$APP_PATH"
 
-# Per-scenario summary
+# ---- Summary header --------------------------------------------------------
+
 SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
 {
   echo "Playback run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -162,9 +227,12 @@ SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
   echo "Scheme:       $SCHEME"
   echo "Device:       $DEVICE_NAME ($DEVICE_ID)"
   echo "OS:           ${OS_VERSION:-(default)}"
+  echo "Leg tag:      ${LEG_TAG:-(none)}"
   echo "Scenarios:    ${#RUN_LIST[@]}"
-  echo "NRVA token:   ${NEW_RELIC_APP_TOKEN:+set}${NEW_RELIC_APP_TOKEN:-(not set)}"
-  echo "NRVA collector: ${NEW_RELIC_COLLECTOR_ADDRESS:-(default)}"
+  echo "NR token:     ${NEW_RELIC_APP_TOKEN:+set}${NEW_RELIC_APP_TOKEN:-(not set)}"
+  echo "Harvest:      ${NR_HARVEST}s / live ${NR_LIVE_HARVEST}s"
+  echo "Debug log:    $NR_DEBUG"
+  echo "Collector:    ${NR_COLLECTOR:-(default)}"
   echo ""
   printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" "id" "mode" "elapsed" "events" "fails" "result"
   printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" "----" "----" "-------" "------" "-----" "------"
@@ -172,115 +240,92 @@ SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
 
 OVERALL_RC=0
 
+# ---- Per-scenario runner ---------------------------------------------------
+
 run_one_scenario() {
   local ID="$1"
   local SPEC="$2"
+  local MODE CAP_SECS
 
-  # Parse mode and cap from SPEC.
-  local MODE
-  local CAP_SECS
   case "$SPEC" in
-    end)
-      MODE=end
-      CAP_SECS=$VOD_SAFETY_CAP
-      ;;
-    end=*)
-      MODE=end
-      CAP_SECS="${SPEC#end=}"
-      ;;
-    fixed=*)
-      MODE=fixed
-      CAP_SECS="${SPEC#fixed=}"
-      ;;
-    *)
-      echo "    ERROR: unknown spec '$SPEC' (use end, end=N, or fixed=N)"
-      return 2
-      ;;
+    end)       MODE=end;   CAP_SECS=$VOD_SAFETY_CAP ;;
+    end=*)     MODE=end;   CAP_SECS="${SPEC#end=}" ;;
+    fixed=*)   MODE=fixed; CAP_SECS="${SPEC#fixed=}" ;;
+    *) echo "    ERROR: unknown spec '$SPEC'"; return 2 ;;
   esac
 
   echo ""
   echo "==> $ID  (mode=$MODE  cap=${CAP_SECS}s)"
 
-  # Make sure no stale instance is running.
   xcrun simctl terminate "$DEVICE_ID" "$APP_BUNDLE_ID" 2>/dev/null || true
   sleep 1
-
-  # Bring the simulator to the front so its GPU keeps rendering frames
-  # (iOS Simulator pauses video render when its window is occluded).
   osascript -e 'tell application "Simulator" to activate' 2>/dev/null || true
 
-  # Pass NewRelic config to the app via launchctl env vars (the simulator's
-  # launchd inherits these to processes it spawns).
-  if [ -n "${NEW_RELIC_APP_TOKEN:-}" ]; then
-    xcrun simctl spawn "$DEVICE_ID" launchctl setenv NEW_RELIC_APP_TOKEN "$NEW_RELIC_APP_TOKEN" 2>/dev/null || true
-  fi
-  if [ -n "${NEW_RELIC_COLLECTOR_ADDRESS:-}" ]; then
-    xcrun simctl spawn "$DEVICE_ID" launchctl setenv NEW_RELIC_COLLECTOR_ADDRESS "$NEW_RELIC_COLLECTOR_ADDRESS" 2>/dev/null || true
-  fi
+  # Forward all NRVA + extra-streams env vars into the simulator's launchd.
+  set_env() { [ -n "$2" ] && xcrun simctl spawn "$DEVICE_ID" launchctl setenv "$1" "$2" 2>/dev/null || true; }
+  set_env NEW_RELIC_APP_TOKEN               "${NEW_RELIC_APP_TOKEN:-}"
+  set_env NEW_RELIC_COLLECTOR_ADDRESS       "$NR_COLLECTOR"
+  set_env NEW_RELIC_HARVEST_CYCLE_SECS      "$NR_HARVEST"
+  set_env NEW_RELIC_LIVE_HARVEST_CYCLE_SECS "$NR_LIVE_HARVEST"
+  set_env NEW_RELIC_REGULAR_BATCH_SIZE_BYTES "$NR_REG_BATCH"
+  set_env NEW_RELIC_LIVE_BATCH_SIZE_BYTES   "$NR_LIVE_BATCH"
+  set_env NEW_RELIC_MAX_DEAD_LETTER_SIZE    "$NR_DEAD_LETTER"
+  set_env NEW_RELIC_MAX_OFFLINE_STORAGE_MB  "$NR_OFFLINE_MB"
+  set_env NEW_RELIC_QOE_ENABLED             "$NR_QOE_ENABLED"
+  set_env NEW_RELIC_QOE_INTERVAL_MULTIPLIER "$NR_QOE_MULT"
+  set_env NEW_RELIC_DEBUG_LOGGING           "$NR_DEBUG"
+  set_env NEW_RELIC_MEMORY_OPTIMIZATION     "$NR_MEM_OPT"
+  set_env PLAYBACK_EXTRA_STREAMS            "$NR_EXTRA_STREAMS"
 
-  # Launch the app with the auto-play arg.
   xcrun simctl launch "$DEVICE_ID" "$APP_BUNDLE_ID" --auto-play "$ID" > /dev/null
-  echo "    launched · ${MODE} mode · capped at ${CAP_SECS}s"
+  echo "    launched · ${MODE} mode · cap ${CAP_SECS}s"
 
-  # Find the log file inside the app's data container.
   CONTAINER=$(xcrun simctl get_app_container "$DEVICE_ID" "$APP_BUNDLE_ID" data 2>/dev/null || true)
   local LOG_FILE="$CONTAINER/Documents/logs/auto-play-$ID.log"
 
-  # Mid-playback screenshot: capture at 30s in (or 25% through, whichever sooner).
   local SHOT_AT=$(( CAP_SECS < 120 ? CAP_SECS / 4 : 30 ))
   ( sleep "$SHOT_AT" && xcrun simctl io "$DEVICE_ID" screenshot "$ARTIFACTS_DIR/$ID-screenshot.png" 2>/dev/null ) &
   local SHOT_PID=$!
 
-  # Wait loop.
   local ELAPSED=0
   local NATURAL_END=0
   while [ $ELAPSED -lt $CAP_SECS ]; do
     sleep 5
     ELAPSED=$((ELAPSED + 5))
-
     if [ -f "$LOG_FILE" ]; then
-      # Always early-exit on FAIL.
       if grep -q "\[FAIL " "$LOG_FILE" 2>/dev/null; then
-        echo "    [FAIL] event detected at ${ELAPSED}s — stopping"
+        echo "    [FAIL] at ${ELAPSED}s — stopping"
         break
       fi
-      # Natural end only matters in `end` mode.
       if [ "$MODE" = "end" ] && grep -q "Player didPlayToEnd" "$LOG_FILE" 2>/dev/null; then
         NATURAL_END=1
-        echo "    didPlayToEnd at ${ELAPSED}s — natural end"
+        echo "    didPlayToEnd at ${ELAPSED}s"
         break
       fi
     fi
-
-    if [ $((ELAPSED % 60)) -eq 0 ]; then
-      echo "    still playing... ${ELAPSED}s / ${CAP_SECS}s"
-    fi
+    [ $((ELAPSED % 60)) -eq 0 ] && echo "    still playing... ${ELAPSED}s / ${CAP_SECS}s"
   done
 
   wait $SHOT_PID 2>/dev/null || true
   xcrun simctl terminate "$DEVICE_ID" "$APP_BUNDLE_ID" 2>/dev/null || true
 
-  # Copy logs.
   local DEST="$ARTIFACTS_DIR/$ID"
   mkdir -p "$DEST"
-  if [ -n "${CONTAINER:-}" ] && [ -d "$CONTAINER/Documents/logs" ]; then
-    cp -R "$CONTAINER/Documents/logs/." "$DEST/" 2>/dev/null || true
-  fi
+  [ -d "$CONTAINER/Documents/logs" ] && cp -R "$CONTAINER/Documents/logs/." "$DEST/" 2>/dev/null || true
 
-  # Summarize.
   local EVENT_COUNT=0
   local FAIL_COUNT=0
-  local SCENARIO_LOG="$DEST/auto-play-$ID.log"
-  if [ -f "$SCENARIO_LOG" ]; then
-    EVENT_COUNT=$(grep -c "\[EVENT" "$SCENARIO_LOG" || true)
-    FAIL_COUNT=$(grep -c "\[FAIL"  "$SCENARIO_LOG" || true)
+  local SCEN_LOG="$DEST/auto-play-$ID.log"
+  if [ -f "$SCEN_LOG" ]; then
+    EVENT_COUNT=$(grep -c "\[EVENT" "$SCEN_LOG" || true)
+    FAIL_COUNT=$(grep -c  "\[FAIL"  "$SCEN_LOG" || true)
   fi
 
   local RESULT
   if [ "$FAIL_COUNT" -gt 0 ]; then
     RESULT="fail"
   elif [ "$MODE" = "end" ] && [ "$NATURAL_END" -eq 0 ]; then
-    RESULT="cap-hit"   # ran to safety cap without natural end
+    RESULT="cap-hit"
   else
     RESULT="ok"
   fi
@@ -288,7 +333,6 @@ run_one_scenario() {
   echo "    result=$RESULT  events=$EVENT_COUNT  fails=$FAIL_COUNT"
   printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" \
     "$ID" "$MODE" "${ELAPSED}s" "$EVENT_COUNT" "$FAIL_COUNT" "$RESULT" >> "$SUMMARY"
-
   [ "$RESULT" = "ok" ] || return 1
 }
 
@@ -303,7 +347,4 @@ echo "============================================================"
 cat "$SUMMARY"
 echo "============================================================"
 echo "Artifacts in: $ARTIFACTS_DIR"
-echo "  - per-scenario logs:        <id>/auto-play-<id>.log"
-echo "  - mid-playback screenshots: <id>-screenshot.png"
-echo "  - run summary:              SUMMARY.txt"
 exit $OVERALL_RC

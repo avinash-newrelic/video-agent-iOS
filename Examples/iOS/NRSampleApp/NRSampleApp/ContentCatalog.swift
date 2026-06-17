@@ -1,15 +1,20 @@
 import Foundation
 
-/// Hard-coded catalog of public test streams that work with iOS App Transport
-/// Security defaults (Apple/Akamai/Google CDNs with widely-trusted certs).
+/// Hard-coded catalog of public test streams. Extra streams can be appended
+/// at runtime by setting the `PLAYBACK_EXTRA_STREAMS` environment variable
+/// to a JSON array of ContentItem objects:
 ///
-/// Bitmovin/Akamai-hosted streams are intentionally excluded: their current
-/// Cloudflare-managed certificate chain isn't trusted by stock iOS, so
-/// playback fails with NSURLErrorDomain Code=-1200.
+///   [
+///     { "id": "my-test", "title": "...", "subtitle": "...",
+///       "streamURL": "https://...", "isLive": false,
+///       "section": "vod", "posterURL": null, "durationSecs": null }
+///   ]
+///
+/// Set in Xcode scheme env vars locally, or via GitHub Actions vars/inputs
+/// in CI. `scripts/run-playback.sh` forwards the env into the simulator.
 enum ContentCatalog {
 
-    static let items: [ContentItem] = [
-        // FEATURED
+    static let hardcoded: [ContentItem] = [
         ContentItem(
             id: "bipbop-adv",
             title: "Apple BipBop",
@@ -20,8 +25,6 @@ enum ContentCatalog {
             isLive: false,
             section: .featured
         ),
-
-        // LIVE
         ContentItem(
             id: "akamai-live",
             title: "Akamai Live",
@@ -32,8 +35,6 @@ enum ContentCatalog {
             isLive: true,
             section: .live
         ),
-
-        // ON DEMAND
         ContentItem(
             id: "big-buck-bunny",
             title: "Big Buck Bunny",
@@ -56,11 +57,34 @@ enum ContentCatalog {
         ),
     ]
 
+    /// Hardcoded catalog plus any items injected via PLAYBACK_EXTRA_STREAMS.
+    /// Computed on each access (cheap; <10 items typically) so the env var
+    /// can be set after app start in tests if needed.
+    static var items: [ContentItem] {
+        hardcoded + extras()
+    }
+
     static func items(in section: ContentItem.Section) -> [ContentItem] {
         items.filter { $0.section == section }
     }
 
     static func featured() -> ContentItem? {
         items.first { $0.section == .featured }
+    }
+
+    // MARK: - Runtime extras
+
+    private static func extras() -> [ContentItem] {
+        guard let raw = ProcessInfo.processInfo.environment["PLAYBACK_EXTRA_STREAMS"],
+              !raw.isEmpty,
+              let data = raw.data(using: .utf8) else {
+            return []
+        }
+        do {
+            return try JSONDecoder().decode([ContentItem].self, from: data)
+        } catch {
+            print("[ContentCatalog] PLAYBACK_EXTRA_STREAMS parse error: \(error)")
+            return []
+        }
     }
 }

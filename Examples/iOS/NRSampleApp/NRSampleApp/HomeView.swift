@@ -14,7 +14,7 @@ struct HomeView: View {
                     ForEach([ContentItem.Section.live, .vod], id: \.self) { section in
                         let items = ContentCatalog.items(in: section)
                         if !items.isEmpty {
-                            SectionRow(title: section.rawValue, items: items)
+                            SectionRow(title: section.displayName, items: items)
                         }
                     }
 

@@ -7,28 +7,21 @@ import NewRelicVideoCore
 // Two-level NRVA configuration:
 //
 //   Level 1 — MAIN VIDEO CONFIGURATION (NRVAVideoConfiguration)
-//   ============================================================
 //   Set ONCE at app launch (`NewRelicSetup.start()` from @main App.init).
-//   Configures: app token, collector address (prod / staging), harvest
-//   cadence, QoE aggregate, debug logging.
 //
 //   Level 2 — PLAYER CONFIGURATION (NRVAVideoPlayerConfiguration)
-//   =============================================================
-//   Set PER PLAYBACK SESSION (`NewRelicSetup.addAVPlayer(...)` from your
-//   PlayerView/PlayerModel). Configures: player name, AVPlayer instance,
-//   ad-tracking on/off, custom per-session attributes.
+//   Set PER PLAYBACK SESSION (`NewRelicSetup.addAVPlayer(...)`).
 //
-// Configuration sources, in priority order:
-//   1. Environment variables (CI sets these via simctl launchctl setenv,
-//      local Xcode users set them in Scheme → Arguments → Environment).
-//   2. Hard-coded fallback (no token = agent disabled, app still plays
-//      videos with full AVKit functionality).
+// All NRVA knobs are configurable via environment variables. Set them in
+// the Xcode scheme (local) or via GitHub Actions vars/secrets (CI).
+// `scripts/run-playback.sh` forwards env vars into the simulator's launchd
+// before each launch, so the app process inherits them.
 
 enum NewRelicSetup {
 
     // MARK: - Level 1: Main video configuration
 
-    /// Call once at app launch (from `@main App.init`). Idempotent.
+    /// Call once at app launch. Idempotent.
     static func start() {
         guard !NRVAVideo.isInitialized() else { return }
         guard let token = appToken() else {
@@ -36,24 +29,35 @@ enum NewRelicSetup {
             return
         }
 
-        var builder = NRVAVideoConfiguration.builder()
+        var b = NRVAVideoConfiguration.builder()
             .withApplicationToken(token)
-            .withQoeAggregateEnabled(true)
-            .withQoeAggregateIntervalMultiplier(2)
-            .withDebugLogging(false)             // set true for verbose Xcode console
+            .withQoeAggregateEnabled(qoeEnabled())
+            .withQoeAggregateIntervalMultiplier(qoeMultiplier())
+            .withHarvestCycle(harvestCycleSecs())
+            .withLiveHarvestCycle(liveHarvestCycleSecs())
+            .withDebugLogging(debugLogging())
+            .withMemoryOptimization(memoryOptimization())
+            .withRegularBatchSize(regularBatchSizeBytes())
+            .withLiveBatchSize(liveBatchSizeBytes())
+            .withMaxDeadLetterSize(maxDeadLetterSize())
+            .withMaxOfflineStorageSize(maxOfflineStorageMB())
 
-        // Optional: custom collector endpoint (e.g. staging).
         if let collector = collectorAddress() {
-            builder = builder.withCollectorAddress(collector)
+            b = b.withCollectorAddress(collector)
         }
 
-        let config = builder.build()
+        let config = b.build()
 
         _ = NRVAVideo.newBuilder()
             .withConfiguration(config)
             .build()
 
-        // Per-session global attributes — appear on every event.
+        print("""
+            [NewRelicSetup] started · harvest=\(harvestCycleSecs())s · liveHarvest=\(liveHarvestCycleSecs())s · \
+            debug=\(debugLogging()) · memOpt=\(memoryOptimization()) · \
+            qoe=\(qoeEnabled())x\(qoeMultiplier()) · collector=\(collectorAddress() ?? "(default)")
+            """)
+
         if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
             NRVAVideo.setGlobalAttribute("appVersion", value: version)
         }
@@ -66,45 +70,96 @@ enum NewRelicSetup {
 
     // MARK: - Level 2: Per-player configuration
 
-    /// Call once per AVPlayer session (e.g., when PlayerView appears).
-    /// Returns the trackerId — pass to `releaseAVPlayer(trackerId:)` on teardown
-    /// and to NRVAVideo APIs that take a trackerId (sendSeekStart, etc.).
     @discardableResult
     static func addAVPlayer(_ player: AVPlayer,
                             name: String,
                             adEnabled: Bool = false,
                             customAttributes: [String: Any] = [:]) -> Int {
         guard NRVAVideo.isInitialized() else { return -1 }
-        let config = NRVAVideoPlayerConfiguration(
+        let cfg = NRVAVideoPlayerConfiguration(
             playerName: name,
             player: player,
             adEnabled: adEnabled,
             customAttributes: customAttributes
         )
-        return NRVAVideo.addPlayer(config)
+        return NRVAVideo.addPlayer(cfg)
     }
 
-    /// Call when tearing down the playback session.
     static func releaseAVPlayer(trackerId: Int) {
         guard NRVAVideo.isInitialized(), trackerId >= 0 else { return }
         NRVAVideo.releaseTracker(trackerId)
     }
 
-    // MARK: - Configuration sources
+    // MARK: - Configuration sources (env vars)
+    // Names match NRVAVideoConfiguration.h fields, prefixed NEW_RELIC_*.
 
     private static func appToken() -> String? {
-        let env = ProcessInfo.processInfo.environment["NEW_RELIC_APP_TOKEN"]
-        guard let env, !env.isEmpty, env != "REPLACE_WITH_YOUR_APP_TOKEN" else { return nil }
-        return env
+        nonEmpty("NEW_RELIC_APP_TOKEN").flatMap {
+            $0 == "REPLACE_WITH_YOUR_APP_TOKEN" ? nil : $0
+        }
     }
 
     private static func collectorAddress() -> String? {
-        let env = ProcessInfo.processInfo.environment["NEW_RELIC_COLLECTOR_ADDRESS"]
-        guard let env, !env.isEmpty else { return nil }
-        return env
+        nonEmpty("NEW_RELIC_COLLECTOR_ADDRESS")
     }
 
-    // MARK: - Stable user ID
+    private static func harvestCycleSecs() -> Int {
+        intEnv("NEW_RELIC_HARVEST_CYCLE_SECS", default: 10)
+    }
+
+    private static func liveHarvestCycleSecs() -> Int {
+        intEnv("NEW_RELIC_LIVE_HARVEST_CYCLE_SECS", default: 10)
+    }
+
+    private static func regularBatchSizeBytes() -> Int {
+        intEnv("NEW_RELIC_REGULAR_BATCH_SIZE_BYTES", default: 65536)   // 64 KB
+    }
+
+    private static func liveBatchSizeBytes() -> Int {
+        intEnv("NEW_RELIC_LIVE_BATCH_SIZE_BYTES", default: 32768)      // 32 KB
+    }
+
+    private static func maxDeadLetterSize() -> Int {
+        intEnv("NEW_RELIC_MAX_DEAD_LETTER_SIZE", default: 100)
+    }
+
+    private static func maxOfflineStorageMB() -> Int {
+        intEnv("NEW_RELIC_MAX_OFFLINE_STORAGE_MB", default: 10)
+    }
+
+    private static func qoeEnabled() -> Bool {
+        boolEnv("NEW_RELIC_QOE_ENABLED", default: true)
+    }
+
+    private static func qoeMultiplier() -> Int {
+        intEnv("NEW_RELIC_QOE_INTERVAL_MULTIPLIER", default: 2)
+    }
+
+    private static func debugLogging() -> Bool {
+        boolEnv("NEW_RELIC_DEBUG_LOGGING", default: true)
+    }
+
+    private static func memoryOptimization() -> Bool {
+        boolEnv("NEW_RELIC_MEMORY_OPTIMIZATION", default: false)
+    }
+
+    // MARK: - Helpers
+
+    private static func nonEmpty(_ key: String) -> String? {
+        let v = ProcessInfo.processInfo.environment[key]
+        guard let v, !v.isEmpty else { return nil }
+        return v
+    }
+
+    private static func intEnv(_ key: String, default fallback: Int) -> Int {
+        guard let raw = nonEmpty(key) else { return fallback }
+        return Int(raw) ?? fallback
+    }
+
+    private static func boolEnv(_ key: String, default fallback: Bool) -> Bool {
+        guard let raw = nonEmpty(key)?.lowercased() else { return fallback }
+        return ["true", "1", "yes", "on"].contains(raw)
+    }
 
     private static let userIdKey = "NRSampleApp.UserId"
 

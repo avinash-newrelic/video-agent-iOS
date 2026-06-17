@@ -1,0 +1,31 @@
+{
+  "_comment": "Default NRVA configuration committed to the repo. Layered config order (highest priority first): (1) workflow_dispatch nr_overrides JSON input, (2) GitHub Actions repo vars (vars.NEW_RELIC_*), (3) per_leg block here, (4) global block here, (5) hard-coded defaults in NewRelicSetup.swift / run-playback.sh. Sensitive values (NEW_RELIC_APP_TOKEN) come from secrets.* — NEVER from this file.",
+
+  "global": {
+    "harvest_cycle_secs": 10,
+    "live_harvest_cycle_secs": 10,
+    "regular_batch_size_bytes": 65536,
+    "live_batch_size_bytes": 32768,
+    "max_dead_letter_size": 100,
+    "max_offline_storage_mb": 10,
+    "qoe_enabled": true,
+    "qoe_interval_multiplier": 2,
+    "debug_logging": true,
+    "memory_optimization": false,
+    "collector_address": ""
+  },
+
+  "per_leg": {
+    "iOS-18-iPhone-17-Pro": {},
+    "iOS-18-iPhone-16-Pro": {},
+    "iOS-17-iPhone-15": {},
+    "iOS-16-iPhone-14": {
+      "harvest_cycle_secs": 30,
+      "_comment": "iOS 16 + corp gateway is slower; longer harvest avoids backlog"
+    },
+    "tvOS-18-Apple-TV-4K": {
+      "memory_optimization": true,
+      "_comment": "Apple TV is constrained; opt into memory mode"
+    }
+  }
+}
