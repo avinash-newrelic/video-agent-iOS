@@ -240,3 +240,90 @@ jobs:
           name: playback-${{ matrix.tag }}-${{ github.run_id }}
           path: Examples/iOS/NRSampleApp/build/playback-artifacts/
           retention-days: 14
+
+  report:
+    name: Status report
+    needs: playback
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download all leg artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: 'playback-*'
+
+      - name: Aggregate green/red across legs
+        id: aggregate
+        run: |
+          set -uo pipefail
+          cd artifacts || { echo "no artifacts to aggregate"; exit 0; }
+
+          {
+            echo "# 🎬 Video Playback — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "Branch: \`${{ github.ref_name }}\` · Trigger: \`${{ github.event_name }}\` · Run: [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo ""
+            echo "| Leg | Status | OK | Fail | Cap-hit | Scenarios |"
+            echo "|---|---|---:|---:|---:|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          TOTAL=0
+          PASSED=0
+          FAILED=0
+
+          for dir in playback-*; do
+            [ -d "$dir" ] || continue
+            TAG=$(echo "$dir" | sed -E 's/^playback-(.*)-[0-9]+$/\1/')
+            SUMMARY="$dir/SUMMARY.txt"
+            TOTAL=$((TOTAL + 1))
+
+            if [ ! -f "$SUMMARY" ]; then
+              echo "| \`$TAG\` | ⚠️ no summary | — | — | — | (artifact missing) |" >> "$GITHUB_STEP_SUMMARY"
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
+            OK=$(grep -c " ok "       "$SUMMARY" 2>/dev/null | head -1)
+            FL=$(grep -c " fail "     "$SUMMARY" 2>/dev/null | head -1)
+            CH=$(grep -c " cap-hit "  "$SUMMARY" 2>/dev/null | head -1)
+            : "${OK:=0}"; : "${FL:=0}"; : "${CH:=0}"
+
+            # Build a compact scenario list (id:result, id:result, ...)
+            SCEN=$(awk 'NR>10 && $1 != "----" && $1 != "OVERALL:" && NF>=6 { printf "%s:%s, ", $1, $6 }' "$SUMMARY" | sed 's/, $//')
+
+            if [ "$FL" -gt 0 ]; then
+              STATUS="❌ red"
+              FAILED=$((FAILED + 1))
+            elif [ "$CH" -gt 0 ]; then
+              STATUS="⚠️ amber"
+              PASSED=$((PASSED + 1))
+            else
+              STATUS="✅ green"
+              PASSED=$((PASSED + 1))
+            fi
+
+            echo "| \`$TAG\` | $STATUS | $OK | $FL | $CH | $SCEN |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          {
+            echo ""
+            if [ "$FAILED" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
+              echo "## ✅ All $TOTAL legs passed"
+            elif [ "$TOTAL" -eq 0 ]; then
+              echo "## ⚠️ No leg artifacts found (all legs may have been skipped)"
+            else
+              echo "## ❌ $FAILED / $TOTAL legs failed"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL"   >> "$GITHUB_OUTPUT"
+
+      - name: Fail workflow if any leg failed
+        if: steps.aggregate.outputs.failed != '0' && steps.aggregate.outputs.failed != ''
+        run: |
+          echo "::error::${{ steps.aggregate.outputs.failed }}/${{ steps.aggregate.outputs.total }} legs failed."
+          exit 1

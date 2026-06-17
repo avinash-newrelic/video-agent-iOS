@@ -138,7 +138,7 @@ Each leg uploads `playback-<leg-tag>-<run_id>` containing:
 
 ```
 build/playback-artifacts/
-├── SUMMARY.txt                        ← pass/fail per scenario
+├── SUMMARY.txt                        ← pass/fail per scenario + OVERALL line
 ├── pod-install.log
 ├── build.log
 ├── <id>/auto-play-<id>.log            ← full per-scenario log
@@ -146,6 +146,17 @@ build/playback-artifacts/
 ```
 
 14-day retention.
+
+## Status report (where to look)
+
+| Surface | Shows |
+|---|---|
+| Workflow page top **Summary** | Aggregated table: each leg's green/red, scenario counts, link to the run |
+| Per-leg job page **Summary** | That leg's scenario table + run config |
+| Workflow status icon (commits / branches view) | ✅ green if all legs passed, ❌ red if any leg has fails |
+| Artifact `SUMMARY.txt` | Plain-text version of the same data |
+
+The `report` job runs after all legs finish (`if: always()`) and emits the top-level Markdown summary by aggregating each leg's `SUMMARY.txt`. If any leg has scenario failures, this job exits 1 and the workflow shows red.
 
 ---
 

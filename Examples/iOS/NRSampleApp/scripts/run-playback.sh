@@ -350,10 +350,46 @@ echo "============================================================"
 cat "$SUMMARY"
 echo "============================================================"
 PASSED=$(grep -c " ok " "$SUMMARY" 2>/dev/null || echo 0)
+FAILED=$(grep -c " fail " "$SUMMARY" 2>/dev/null || echo 0)
+CAPHIT=$(grep -c " cap-hit " "$SUMMARY" 2>/dev/null || echo 0)
 TOTAL=${#RUN_LIST[@]}
+if [ "$FAILED" -gt 0 ]; then
+  OVERALL="fail"
+  EMOJI="❌"
+elif [ "$CAPHIT" -gt 0 ]; then
+  OVERALL="cap-hit"
+  EMOJI="⚠️"
+else
+  OVERALL="ok"
+  EMOJI="✅"
+fi
+echo "OVERALL: $OVERALL ($PASSED ok, $FAILED fail, $CAPHIT cap-hit, $TOTAL total)" >> "$SUMMARY"
 echo "==> $PASSED/$TOTAL scenarios ok"
 echo "==> Artifacts in: $ARTIFACTS_DIR"
 echo "============================================================"
+
+# Emit a Markdown summary to the GitHub Actions job page (per-leg).
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "## $EMOJI ${LEG_TAG:-$DEVICE_NAME}"
+    echo ""
+    echo "**Result: \`$OVERALL\`** — $PASSED ok · $FAILED fail · $CAPHIT cap-hit · $TOTAL total"
+    echo ""
+    echo "| Scenario | Mode | Elapsed | Events | Fails | Result |"
+    echo "|---|---|---|---|---|---|"
+    # Re-parse SUMMARY.txt's data rows (skip the header lines).
+    awk 'NR>10 && $1 != "----" && $1 != "OVERALL:" && NF>=6 {
+      printf "| %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6
+    }' "$SUMMARY"
+    echo ""
+    echo "<details><summary>Run config</summary>"
+    echo ""
+    echo "\`\`\`"
+    head -10 "$SUMMARY"
+    echo "\`\`\`"
+    echo "</details>"
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
 # Always exit 0 so a failed scenario doesn't fail the GitHub job; the
 # SUMMARY.txt artifact + per-scenario log files carry the verdict. Set
 # FAIL_ON_ERROR=1 to reverse this and propagate the non-zero RC.
