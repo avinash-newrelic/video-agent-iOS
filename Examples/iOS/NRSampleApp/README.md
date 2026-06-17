@@ -92,12 +92,14 @@ Layered config, priority high → low:
 
 ## Schedule (CI)
 
-Two cron expressions:
+Two cron expressions. GitHub Actions cron is UTC-only (no native timezone), so the values are written as UTC; the IST column shows the equivalent local time.
 
-| When | Cron | Purpose |
-|---|---|---|
-| **Daily** | `17 6 * * *` | 06:17 UTC every day — comprehensive |
-| **Every 6h** | `17 */6 * * *` | 00:17 / 06:17 / 12:17 / 18:17 UTC — smoke |
+| When | UTC cron | UTC time | IST time |
+|---|---|---|---|
+| **Daily comprehensive** | `30 3 * * *` | 03:30 | **09:00** |
+| **Smoke every 6h** | `30 */6 * * *` | 00:30 / 06:30 / 12:30 / 18:30 | **06:00 / 12:00 / 18:00 / 00:00** |
+
+To shift everything by N hours, add/subtract N from the UTC hour fields.
 
 Plus push to `internal/video-rig` and manual `Run workflow`.
 
