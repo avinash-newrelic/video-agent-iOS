@@ -1,45 +1,90 @@
 import Foundation
+import AVFoundation
+import NewRelicVideoCore
 
-// IMPORTANT: This is the canonical NewRelic Video Agent wiring file.
-// Customers should be able to copy this verbatim into their own apps.
-// Keep it tight, well-commented (with WHY), and grounded in the agent's
-// public API. Update as the agent evolves.
+// CANONICAL: copy this file verbatim into your own iOS app.
 //
-// Skeleton commit: actual NRVA API calls are marked TODO. They will be
-// filled in once the canonical NRVAVideo facade calls are wired into
-// the project's import path. The shape below is what customers see.
+// Initialization order:
+//   1. Build NRVAVideoConfiguration  (token, harvest, QoE, debug)
+//   2. Initialize NRVAVideo singleton via builder
+//   3. Set user ID + global attributes
+//   4. (Per-video) call NewRelicSetup.addAVPlayer(...) when you create
+//      an AVPlayer; call releaseAVPlayer(trackerId:) when you tear down.
 
 enum NewRelicSetup {
 
-    /// The application token from one.newrelic.com. Read from environment so
-    /// the token never lands in a public repo. CI sets this; local dev sets
-    /// it via Xcode scheme env vars.
+    /// App token from one.newrelic.com.
+    /// Read from environment so it's never committed to source control.
+    /// CI sets `NEW_RELIC_APP_TOKEN` via the workflow; local dev sets it via
+    /// the Xcode scheme's "Arguments → Environment Variables."
     private static var appToken: String {
         ProcessInfo.processInfo.environment["NEW_RELIC_APP_TOKEN"]
             ?? "REPLACE_WITH_YOUR_APP_TOKEN"
     }
 
-    /// Call once at app launch (e.g. from @main App.init).
+    /// Call once at app launch (e.g. from `@main App.init`).
+    /// Idempotent — safe to call multiple times.
     static func start() {
-        // 1. Start the agent.
-        //    QoE is enabled by default in v4.1.x with interval multiplier 2,
-        //    so harvest cadence stays in step with event volume.
-        // TODO: NRVAVideo.start(withApplicationToken: appToken)
+        guard !NRVAVideo.isInitialized() else { return }
 
-        // 2. Per-session attributes — appear on every event from this session.
-        //    Examples customers typically set: app version, build, environment.
-        // TODO: NRVAVideo.setAttribute("appVersion", value: Bundle.main.shortVersion)
-        // TODO: NRVAVideo.setAttribute("environment", value: "production")
+        // 1. Configuration. QoE aggregate is enabled by default in v4.1.x with
+        //    interval multiplier 2 — harvest cadence stays in step with event
+        //    volume. Tune `withHarvestCycle:` for your traffic shape.
+        let config = NRVAVideoConfiguration.builder()
+            .withApplicationToken(appToken)
+            .withQoeAggregateEnabled(true)
+            .withQoeAggregateIntervalMultiplier(2)
+            .withDebugLogging(true)              // off for production
+            .build()
 
-        // 3. User identifier — for cross-event correlation in NRQL.
-        //    Use a stable ID (a UUID kept in Keychain for a real app).
-        // TODO: NRVAVideo.setUserId(stableUserId())
+        // 2. Initialize the singleton via the builder.
+        _ = NRVAVideo.newBuilder()
+            .withConfiguration(config)
+            .build()
 
-        // 4. Optional: content metadata if known at session start. Most apps
-        //    set these per-video instead, alongside startTracker.
+        // 3. Per-session global attributes — appear on every event.
+        if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            NRVAVideo.setGlobalAttribute("appVersion", value: version)
+        }
+        NRVAVideo.setGlobalAttribute("environment", value: "test")
 
-        // 5. Optional: surface the agent's events into our in-app overlay so
-        //    the dev (and XCUITest) can see them live. Wires to EventLogOverlay.
-        // TODO: NRVAEventTap.shared.enable()
+        // 4. Stable user ID for cross-event correlation in NRQL.
+        //    UserDefaults is fine for a sample app; use Keychain in production.
+        NRVAVideo.setUserId(stableUserId())
+    }
+
+    /// Add an AVPlayer to be tracked. Call once per playback session.
+    /// Returns the trackerId — pass it to APIs that take a trackerId
+    /// (sendSeekStart:, setAttribute:, releaseTracker:).
+    @discardableResult
+    static func addAVPlayer(_ player: AVPlayer,
+                            name: String,
+                            adEnabled: Bool = false,
+                            customAttributes: [String: Any] = [:]) -> Int {
+        let config = NRVAVideoPlayerConfiguration(
+            playerName: name,
+            player: player,
+            adEnabled: adEnabled,
+            customAttributes: customAttributes
+        )
+        return NRVAVideo.addPlayer(config)
+    }
+
+    /// Release a previously added player tracker.
+    static func releaseAVPlayer(trackerId: Int) {
+        NRVAVideo.releaseTracker(trackerId)
+    }
+
+    // MARK: - Internal helpers
+
+    private static let userIdKey = "NRSampleApp.UserId"
+
+    private static func stableUserId() -> String {
+        if let existing = UserDefaults.standard.string(forKey: userIdKey) {
+            return existing
+        }
+        let new = UUID().uuidString
+        UserDefaults.standard.set(new, forKey: userIdKey)
+        return new
     }
 }
