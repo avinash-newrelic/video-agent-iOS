@@ -1,6 +1,9 @@
 name: video-playback
 
 # Runs NRSampleApp playback automation across iOS + tvOS simulators in parallel.
+# Five matrix legs: iOS 18 (iPhone 17 Pro + 16 Pro), iOS 17 (iPhone 15),
+# iOS 16 (iPhone 14, runtime downloaded at CI time), tvOS 18 (Apple TV 4K).
+#
 # Each scenario plays for its declared duration. Live scenarios run 30 minutes;
 # VOD scenarios run 60s of real playback. Per-scenario logs and a mid-playback
 # screenshot are uploaded as artifacts.
@@ -17,7 +20,7 @@ on:
         required: false
         default: ''
       matrix_filter:
-        description: 'Filter matrix legs by tag substring (e.g., "tvOS", "iPhone-15"). Empty = all.'
+        description: 'Filter matrix legs by tag substring (e.g., "tvOS", "iOS-16"). Empty = all.'
         required: false
         default: ''
   push:
@@ -37,29 +40,48 @@ jobs:
   playback:
     name: ${{ matrix.tag }}
     runs-on: macos-14
-    timeout-minutes: 75
+    timeout-minutes: 90
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - tag: iOS-iPhone-16-Pro
+          # Pre-installed runtimes (no download needed)
+          - tag: iOS-18-iPhone-17-Pro
+            platform: iOS
+            scheme: NRSampleApp_iOS
+            device: iPhone 17 Pro
+            os_version: ""
+            download_os: ""
+
+          - tag: iOS-18-iPhone-16-Pro
             platform: iOS
             scheme: NRSampleApp_iOS
             device: iPhone 16 Pro
             os_version: ""
+            download_os: ""
 
-          - tag: iOS-iPhone-15
+          - tag: iOS-17-iPhone-15
             platform: iOS
             scheme: NRSampleApp_iOS
             device: iPhone 15
-            os_version: ""
+            os_version: "17.5"
+            download_os: ""
 
-          - tag: tvOS-Apple-TV-4K
+          # Older runtime — needs download (~10 min)
+          - tag: iOS-16-iPhone-14
+            platform: iOS
+            scheme: NRSampleApp_iOS
+            device: iPhone 14
+            os_version: "16.4"
+            download_os: "16.4"
+
+          - tag: tvOS-18-Apple-TV-4K
             platform: tvOS
             scheme: NRSampleApp_tvOS
             device: Apple TV 4K (3rd generation)
             os_version: ""
+            download_os: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -67,27 +89,63 @@ jobs:
       - name: Skip if not in matrix_filter
         if: inputs.matrix_filter != '' && !contains(matrix.tag, inputs.matrix_filter)
         run: |
-          echo "Matrix filter '${{ inputs.matrix_filter }}' does not include '${{ matrix.tag }}' — skipping."
-          exit 0
+          echo "Matrix filter '${{ inputs.matrix_filter }}' excludes '${{ matrix.tag }}' — skipping."
+          # Don't fail; just exit cleanly. The artifact upload step is `if: always()`.
+        continue-on-error: true
 
       - name: Install XcodeGen
+        if: inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter)
         run: brew install xcodegen
 
-      - name: List installed simulators (debug)
-        run: xcrun simctl list devices available | head -60
+      - name: Show pre-installed simulator runtimes
+        if: inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter)
+        run: xcrun simctl list runtimes
+
+      - name: Download iOS runtime ${{ matrix.download_os }}
+        if: matrix.download_os != '' && (inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter))
+        run: |
+          set -euxo pipefail
+          echo "Downloading iOS ${{ matrix.download_os }} simulator runtime..."
+          # Xcode 16+ supports this directly. Falls back to non-sudo if the
+          # runner's Xcode permits it.
+          sudo xcodebuild -downloadPlatform iOS -buildVersion ${{ matrix.download_os }} \
+            || xcodebuild -downloadPlatform iOS -buildVersion ${{ matrix.download_os }}
+          xcrun simctl list runtimes | grep -i "iOS ${{ matrix.download_os }}" || {
+            echo "ERROR: runtime did not install"; exit 1;
+          }
+
+      - name: Create simulator for ${{ matrix.tag }}
+        if: matrix.os_version != '' && (inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter))
+        run: |
+          set -euxo pipefail
+          # Build runtime identifier: iOS-17-5, iOS-16-4, etc.
+          RUNTIME_ID="iOS-${{ matrix.os_version }}"
+          RUNTIME_ID="${RUNTIME_ID//./-}"
+          # Create the device. If it already exists (from a previous run on
+          # the same physical runner — unlikely but possible), simctl errors;
+          # we ignore that and continue.
+          xcrun simctl create "auto-${{ matrix.tag }}" "${{ matrix.device }}" "$RUNTIME_ID" \
+            || echo "(device may already exist — continuing)"
+          xcrun simctl list devices "auto-${{ matrix.tag }}"
 
       - name: Run playback automation
+        if: inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter)
         working-directory: Examples/iOS/NRSampleApp
         env:
           SCENARIOS: ${{ inputs.scenarios }}
           PLATFORM: ${{ matrix.platform }}
           SCHEME: ${{ matrix.scheme }}
-          DEVICE_NAME: ${{ matrix.device }}
+          # When os_version is set, we created a custom device "auto-<tag>".
+          # When it's empty, the script uses the matrix.device name as-is.
+          DEVICE_NAME: >-
+            ${{ matrix.os_version != ''
+                && format('auto-{0}', matrix.tag)
+                || matrix.device }}
           OS_VERSION: ${{ matrix.os_version }}
         run: ./scripts/run-playback.sh
 
       - name: Upload artifacts
-        if: always()
+        if: always() && (inputs.matrix_filter == '' || contains(matrix.tag, inputs.matrix_filter))
         uses: actions/upload-artifact@v4
         with:
           name: playback-${{ matrix.tag }}-${{ github.run_id }}
