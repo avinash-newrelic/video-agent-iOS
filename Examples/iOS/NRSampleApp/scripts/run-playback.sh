@@ -79,7 +79,11 @@ NR_EXTRA_STREAMS=""
 read_jq() {           # read_jq <path-expression> <var>
   local val
   val=$(jq -r "$1 // empty" "$CONFIG_FILE" 2>/dev/null || true)
-  [ -n "$val" ] && eval "$2=\"\$val\""
+  if [ -n "$val" ]; then
+    eval "$2=\"\$val\""
+  fi
+  # Always return 0 — empty keys are normal under set -e.
+  return 0
 }
 
 if [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
@@ -112,26 +116,31 @@ if [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
-# Layer 2: env vars (set by GitHub vars.* / local exports)
-[ -n "${NEW_RELIC_HARVEST_CYCLE_SECS:-}" ]       && NR_HARVEST="$NEW_RELIC_HARVEST_CYCLE_SECS"
-[ -n "${NEW_RELIC_LIVE_HARVEST_CYCLE_SECS:-}" ]  && NR_LIVE_HARVEST="$NEW_RELIC_LIVE_HARVEST_CYCLE_SECS"
-[ -n "${NEW_RELIC_REGULAR_BATCH_SIZE_BYTES:-}" ] && NR_REG_BATCH="$NEW_RELIC_REGULAR_BATCH_SIZE_BYTES"
-[ -n "${NEW_RELIC_LIVE_BATCH_SIZE_BYTES:-}" ]    && NR_LIVE_BATCH="$NEW_RELIC_LIVE_BATCH_SIZE_BYTES"
-[ -n "${NEW_RELIC_MAX_DEAD_LETTER_SIZE:-}" ]     && NR_DEAD_LETTER="$NEW_RELIC_MAX_DEAD_LETTER_SIZE"
-[ -n "${NEW_RELIC_MAX_OFFLINE_STORAGE_MB:-}" ]   && NR_OFFLINE_MB="$NEW_RELIC_MAX_OFFLINE_STORAGE_MB"
-[ -n "${NEW_RELIC_QOE_ENABLED:-}" ]              && NR_QOE_ENABLED="$NEW_RELIC_QOE_ENABLED"
-[ -n "${NEW_RELIC_QOE_INTERVAL_MULTIPLIER:-}" ]  && NR_QOE_MULT="$NEW_RELIC_QOE_INTERVAL_MULTIPLIER"
-[ -n "${NEW_RELIC_DEBUG_LOGGING:-}" ]            && NR_DEBUG="$NEW_RELIC_DEBUG_LOGGING"
-[ -n "${NEW_RELIC_MEMORY_OPTIMIZATION:-}" ]      && NR_MEM_OPT="$NEW_RELIC_MEMORY_OPTIMIZATION"
-[ -n "${NEW_RELIC_COLLECTOR_ADDRESS:-}" ]        && NR_COLLECTOR="$NEW_RELIC_COLLECTOR_ADDRESS"
-[ -n "${PLAYBACK_EXTRA_STREAMS:-}" ]             && NR_EXTRA_STREAMS="$PLAYBACK_EXTRA_STREAMS"
+# Layer 2: env vars (set by GitHub vars.* / local exports). Use parameter
+# expansion `${VAR:-default}` instead of `[ -n ] && X=Y` so empty env vars
+# don't trip set -e — empty is the normal "not set" state.
+NR_HARVEST="${NEW_RELIC_HARVEST_CYCLE_SECS:-$NR_HARVEST}"
+NR_LIVE_HARVEST="${NEW_RELIC_LIVE_HARVEST_CYCLE_SECS:-$NR_LIVE_HARVEST}"
+NR_REG_BATCH="${NEW_RELIC_REGULAR_BATCH_SIZE_BYTES:-$NR_REG_BATCH}"
+NR_LIVE_BATCH="${NEW_RELIC_LIVE_BATCH_SIZE_BYTES:-$NR_LIVE_BATCH}"
+NR_DEAD_LETTER="${NEW_RELIC_MAX_DEAD_LETTER_SIZE:-$NR_DEAD_LETTER}"
+NR_OFFLINE_MB="${NEW_RELIC_MAX_OFFLINE_STORAGE_MB:-$NR_OFFLINE_MB}"
+NR_QOE_ENABLED="${NEW_RELIC_QOE_ENABLED:-$NR_QOE_ENABLED}"
+NR_QOE_MULT="${NEW_RELIC_QOE_INTERVAL_MULTIPLIER:-$NR_QOE_MULT}"
+NR_DEBUG="${NEW_RELIC_DEBUG_LOGGING:-$NR_DEBUG}"
+NR_MEM_OPT="${NEW_RELIC_MEMORY_OPTIMIZATION:-$NR_MEM_OPT}"
+NR_COLLECTOR="${NEW_RELIC_COLLECTOR_ADDRESS:-$NR_COLLECTOR}"
+NR_EXTRA_STREAMS="${PLAYBACK_EXTRA_STREAMS:-$NR_EXTRA_STREAMS}"
 
 # Layer 1: nr_overrides JSON from workflow_dispatch
 if [ -n "${NR_OVERRIDES_JSON:-}" ] && [ "$NR_OVERRIDES_JSON" != "{}" ] && command -v jq >/dev/null 2>&1; then
   read_override() {
     local val
     val=$(echo "$NR_OVERRIDES_JSON" | jq -r ".$1 // empty" 2>/dev/null || true)
-    [ -n "$val" ] && eval "$2=\"\$val\""
+    if [ -n "$val" ]; then
+      eval "$2=\"\$val\""
+    fi
+    return 0
   }
   read_override harvest_cycle_secs        NR_HARVEST
   read_override live_harvest_cycle_secs   NR_LIVE_HARVEST
@@ -170,7 +179,9 @@ if [ -n "${SCENARIOS:-}" ]; then
   declare -a RUN_LIST=()
   for sel in "${SELECTED[@]}"; do
     for s in "${DEFAULT_SCENARIOS[@]}"; do
-      [[ "$s" == "$sel:"* ]] && RUN_LIST+=("$s")
+      if [[ "$s" == "$sel:"* ]]; then
+        RUN_LIST+=("$s")
+      fi
     done
   done
   [ ${#RUN_LIST[@]} -eq 0 ] && { echo "ERROR: SCENARIOS filter matched nothing"; exit 1; }
@@ -303,7 +314,9 @@ run_one_scenario() {
         break
       fi
     fi
-    [ $((ELAPSED % 60)) -eq 0 ] && echo "    still playing... ${ELAPSED}s / ${CAP_SECS}s"
+    if [ $((ELAPSED % 60)) -eq 0 ]; then
+      echo "    still playing... ${ELAPSED}s / ${CAP_SECS}s"
+    fi
   done
 
   wait $SHOT_PID 2>/dev/null || true
