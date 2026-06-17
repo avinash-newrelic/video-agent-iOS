@@ -23,7 +23,9 @@ struct PlayerView: View {
             }
         }
         .navigationTitle(item.title)
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .onAppear { model.start(item: item) }
         .onDisappear { model.stop() }
     }

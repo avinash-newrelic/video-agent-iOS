@@ -1,9 +1,9 @@
 name: video-playback
 
-# Runs NRSampleApp playback automation:
-#   - VOD scenarios play to natural end (didPlayToEnd) — capped at 15 min
-#   - Live scenarios run for 30 minutes (configurable per scenario)
-# One trigger → all scenarios play → logs + screenshots uploaded as artifacts.
+# Runs NRSampleApp playback automation across iOS + tvOS simulators in parallel.
+# Each scenario plays for its declared duration. Live scenarios run 30 minutes;
+# VOD scenarios run 60s of real playback. Per-scenario logs and a mid-playback
+# screenshot are uploaded as artifacts.
 #
 # This workflow lives only on `internal/video-rig` and is not merged to master.
 
@@ -14,6 +14,10 @@ on:
     inputs:
       scenarios:
         description: 'Comma-separated subset (e.g., bipbop-adv,akamai-live). Empty = all.'
+        required: false
+        default: ''
+      matrix_filter:
+        description: 'Filter matrix legs by tag substring (e.g., "tvOS", "iPhone-15"). Empty = all.'
         required: false
         default: ''
   push:
@@ -31,27 +35,61 @@ concurrency:
 
 jobs:
   playback:
-    name: NRSampleApp playback
+    name: ${{ matrix.tag }}
     runs-on: macos-14
-    timeout-minutes: 75   # full run is ~33 min; cap allows for build + retries
+    timeout-minutes: 75
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: iOS-iPhone-16-Pro
+            platform: iOS
+            scheme: NRSampleApp_iOS
+            device: iPhone 16 Pro
+            os_version: ""
+
+          - tag: iOS-iPhone-15
+            platform: iOS
+            scheme: NRSampleApp_iOS
+            device: iPhone 15
+            os_version: ""
+
+          - tag: tvOS-Apple-TV-4K
+            platform: tvOS
+            scheme: NRSampleApp_tvOS
+            device: Apple TV 4K (3rd generation)
+            os_version: ""
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Skip if not in matrix_filter
+        if: inputs.matrix_filter != '' && !contains(matrix.tag, inputs.matrix_filter)
+        run: |
+          echo "Matrix filter '${{ inputs.matrix_filter }}' does not include '${{ matrix.tag }}' — skipping."
+          exit 0
+
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: List installed simulators (debug)
+        run: xcrun simctl list devices available | head -60
 
       - name: Run playback automation
         working-directory: Examples/iOS/NRSampleApp
         env:
           SCENARIOS: ${{ inputs.scenarios }}
-          DEVICE_NAME: iPhone 16 Pro
+          PLATFORM: ${{ matrix.platform }}
+          SCHEME: ${{ matrix.scheme }}
+          DEVICE_NAME: ${{ matrix.device }}
+          OS_VERSION: ${{ matrix.os_version }}
         run: ./scripts/run-playback.sh
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playback-${{ github.run_id }}
+          name: playback-${{ matrix.tag }}-${{ github.run_id }}
           path: Examples/iOS/NRSampleApp/build/playback-artifacts/
           retention-days: 14

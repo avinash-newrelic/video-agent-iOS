@@ -15,7 +15,9 @@ struct LogViewerView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Logs")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .onAppear {
             reload()
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in

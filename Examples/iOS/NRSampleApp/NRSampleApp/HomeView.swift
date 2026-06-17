@@ -24,6 +24,7 @@ struct HomeView: View {
             }
             .background(Color.black.ignoresSafeArea())
             .navigationTitle("Watch")
+            #if os(iOS)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink {
@@ -37,8 +38,11 @@ struct HomeView: View {
                     })
                 }
             }
+            #endif
         }
+        #if os(iOS)
         .navigationViewStyle(.stack)
+        #endif
         .onAppear {
             AppLog.shared.log(.event, "App", "HomeView appeared",
                               ["catalog_size": ContentCatalog.items.count])
@@ -66,10 +70,12 @@ private struct SectionRow: View {
                             CardView(item: item)
                         }
                         .buttonStyle(.plain)
+                        #if os(iOS)
                         .simultaneousGesture(TapGesture().onEnded {
                             AppLog.shared.log(.action, "Catalog", "tap card",
                                               ["id": item.id, "title": item.title])
                         })
+                        #endif
                     }
                 }
                 .padding(.horizontal, 16)
@@ -109,10 +115,12 @@ private struct HeroCardView: View {
             .clipShape(RoundedRectangle(cornerRadius: 20))
         }
         .buttonStyle(.plain)
+        #if os(iOS)
         .simultaneousGesture(TapGesture().onEnded {
             AppLog.shared.log(.action, "Catalog", "tap hero",
                               ["id": item.id, "title": item.title])
         })
+        #endif
     }
 }
 

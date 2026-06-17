@@ -15,11 +15,17 @@
 # Designed to run identically on a developer's laptop and on GitHub Actions.
 #
 # Usage:
-#   ./scripts/run-playback.sh
-#   SCENARIOS=bipbop-adv,akamai-live ./scripts/run-playback.sh   # subset
+#   ./scripts/run-playback.sh                                                  # iOS, default device
+#   PLATFORM=tvOS ./scripts/run-playback.sh                                    # tvOS
+#   PLATFORM=iOS DEVICE_NAME='iPhone 15' OS_VERSION=17.5 ./scripts/run-playback.sh
+#   SCENARIOS=bipbop-adv,akamai-live ./scripts/run-playback.sh                 # subset
 #
 # Environment overrides:
-#   DEVICE_NAME       Simulator to use (default: "iPhone 16 Pro")
+#   PLATFORM          'iOS' (default) or 'tvOS'
+#   DEVICE_NAME       Simulator name (default: "iPhone 16 Pro" for iOS,
+#                     "Apple TV 4K (3rd generation)" for tvOS)
+#   OS_VERSION        Simulator OS version (default: latest available)
+#   SCHEME            Xcode scheme (default: NRSampleApp_<platform>)
 #   ARTIFACTS_DIR     Where to write artifacts (default: build/playback-artifacts)
 #   DERIVED_DATA      DerivedData path (default: build)
 #
@@ -29,11 +35,35 @@ set -euo pipefail
 # Run from the NRSampleApp directory regardless of where this is invoked.
 cd "$(dirname "$0")/.."
 
-DEVICE_NAME="${DEVICE_NAME:-iPhone 16 Pro}"
-APP_BUNDLE_ID="com.newrelic.video.sample.NRSampleApp"
+PLATFORM="${PLATFORM:-iOS}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-build/playback-artifacts}"
 DERIVED_DATA="${DERIVED_DATA:-build}"
-APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/NRSampleApp.app"
+
+case "$PLATFORM" in
+  iOS)
+    DESTINATION_PLATFORM="iOS Simulator"
+    BUILD_PRODUCTS_DIR="Debug-iphonesimulator"
+    DEFAULT_DEVICE="iPhone 16 Pro"
+    APP_BUNDLE_ID="com.newrelic.video.sample.NRSampleApp"
+    DEFAULT_SCHEME="NRSampleApp_iOS"
+    ;;
+  tvOS)
+    DESTINATION_PLATFORM="tvOS Simulator"
+    BUILD_PRODUCTS_DIR="Debug-appletvsimulator"
+    DEFAULT_DEVICE="Apple TV 4K (3rd generation)"
+    APP_BUNDLE_ID="com.newrelic.video.sample.NRSampleApp.tvOS"
+    DEFAULT_SCHEME="NRSampleApp_tvOS"
+    ;;
+  *)
+    echo "ERROR: PLATFORM must be 'iOS' or 'tvOS' (got: $PLATFORM)"
+    exit 1
+    ;;
+esac
+
+DEVICE_NAME="${DEVICE_NAME:-$DEFAULT_DEVICE}"
+SCHEME="${SCHEME:-$DEFAULT_SCHEME}"
+OS_VERSION="${OS_VERSION:-}"
+APP_PATH="$DERIVED_DATA/Build/Products/$BUILD_PRODUCTS_DIR/NRSampleApp.app"
 
 # Default scenarios — id:duration_secs.
 # Each video plays for that many seconds of REAL playback then is killed.
@@ -72,7 +102,7 @@ mkdir -p "$ARTIFACTS_DIR"
 echo "==> Generating Xcode project"
 xcodegen generate
 
-echo "==> Resolving simulator: $DEVICE_NAME"
+echo "==> Resolving simulator: $DEVICE_NAME ($PLATFORM${OS_VERSION:+, OS=$OS_VERSION})"
 DEVICE_LINE=$(xcrun simctl list devices "$DEVICE_NAME" available | grep -m1 "$DEVICE_NAME" || true)
 if [ -z "$DEVICE_LINE" ]; then
   echo "ERROR: no simulator named '$DEVICE_NAME' available"
@@ -83,16 +113,23 @@ fi
 DEVICE_ID=$(echo "$DEVICE_LINE" | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
 echo "    $DEVICE_ID"
 
+# xcodebuild destination string
+if [ -n "$OS_VERSION" ]; then
+  DESTINATION="platform=$DESTINATION_PLATFORM,name=$DEVICE_NAME,OS=$OS_VERSION"
+else
+  DESTINATION="platform=$DESTINATION_PLATFORM,name=$DEVICE_NAME"
+fi
+
 echo "==> Booting simulator (no-op if already booted)"
 xcrun simctl boot "$DEVICE_ID" 2>/dev/null || true
 xcrun simctl bootstatus "$DEVICE_ID" -b
 # Bring the simulator window forward so a human can watch playback.
 open -a Simulator || true
 
-echo "==> Building NRSampleApp"
+echo "==> Building $SCHEME"
 xcodebuild build \
   -project NRSampleApp.xcodeproj \
-  -scheme NRSampleApp \
+  -scheme "$SCHEME" \
   -configuration Debug \
   -destination "id=$DEVICE_ID" \
   -derivedDataPath "$DERIVED_DATA" \
@@ -112,7 +149,10 @@ xcrun simctl install "$DEVICE_ID" "$APP_PATH"
 SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
 {
   echo "Playback run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "Platform:     $PLATFORM"
+  echo "Scheme:       $SCHEME"
   echo "Device:       $DEVICE_NAME ($DEVICE_ID)"
+  echo "OS:           ${OS_VERSION:-(default)}"
   echo "Scenarios:    ${#RUN_LIST[@]}"
   echo ""
   printf "%-20s %-10s %-8s %-7s %-10s\n" "id" "duration" "events" "fails" "result"
