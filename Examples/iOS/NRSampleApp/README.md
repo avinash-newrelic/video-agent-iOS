@@ -22,14 +22,16 @@ The simulator stays focused so you can watch + hear playback. Artifacts land in 
 
 ## What runs by default
 
-| Scenario | Stream | Mode | Duration |
-|---|---|---|---|
-| bipbop-adv | Apple HLS adaptive | play to natural end | ~10 min |
-| bipbop-basic | Apple HLS basic | play to natural end | ~30 min |
-| big-buck-bunny | Blender | play to natural end | ~10 min |
-| akamai-live | Akamai HLS live | 30 min cap | 30 min |
+Each scenario plays for **5 minutes of real playback** (a sample, not full playthrough), then is terminated. Total per leg ≈ 25 min (20 min play + 5 min build/install/boot).
 
-VOD scenarios run until `didPlayToEnd` (capped at 60 min for safety). Live runs the full 30 min.
+| Scenario | Stream | Cap |
+|---|---|---|
+| bipbop-adv | Apple HLS adaptive | 5 min |
+| bipbop-basic | Apple HLS basic | 5 min |
+| big-buck-bunny | Blender | 5 min |
+| akamai-live | Akamai HLS live | 5 min |
+
+5 minutes is enough to verify decode + steady-state events at the configured 10-second harvest cycle (≈30 harvest cycles per scenario). For deeper validation (memory leaks, hour-long stability), tune the cap up via the `nr_overrides` input or edit `DEFAULT_SCENARIOS` in `scripts/run-playback.sh`.
 
 ---
 

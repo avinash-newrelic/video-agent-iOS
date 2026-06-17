@@ -3,8 +3,8 @@
 # run-playback.sh — automation for the NRSampleApp catalog.
 #
 # Builds the app, boots a simulator, and plays every catalog item:
-#   - VOD: plays to natural didPlayToEnd (capped at VOD_SAFETY_CAP secs)
-#   - Live: plays for a configured wall-clock duration
+#   - Each scenario plays for 5 minutes of REAL playback (sample), then is
+#     terminated. ~25 min total per leg. See DEFAULT_SCENARIOS below.
 #
 # Real AVKit playback. Simulator window stays focused. Mid-playback
 # screenshot per scenario. Per-scenario log file copied to artifacts.
@@ -166,12 +166,16 @@ echo "    appToken=${NEW_RELIC_APP_TOKEN:+(set)}${NEW_RELIC_APP_TOKEN:-(not set)
 
 # ---- Scenarios -------------------------------------------------------------
 
-VOD_SAFETY_CAP=3600
+# Every scenario is capped at 5 minutes of REAL playback (a sample, not
+# play-to-end). Sampling is enough to verify decode + steady-state events;
+# play-to-end of Apple's 30-min bipbop-basic took ~85 min/leg — too slow
+# for daily CI.
+VOD_SAFETY_CAP=3600   # only used by `end` mode; defaults below use fixed=300
 DEFAULT_SCENARIOS=(
-  "bipbop-adv:end"
-  "bipbop-basic:end"
-  "big-buck-bunny:end"
-  "akamai-live:fixed=1800"
+  "bipbop-adv:fixed=300"
+  "bipbop-basic:fixed=300"
+  "big-buck-bunny:fixed=300"
+  "akamai-live:fixed=300"
 )
 
 if [ -n "${SCENARIOS:-}" ]; then
