@@ -46,6 +46,7 @@ final class PlayerModel: ObservableObject {
 
     private var startedAt: Date?
     private var contentId: String = ""
+    private var nrvaTrackerId: Int = -1
 
     func start(item: ContentItem) {
         contentId = item.id
@@ -62,6 +63,20 @@ final class PlayerModel: ObservableObject {
         let playerItem = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: playerItem)
         self.player = player
+
+        // Level 2: per-player NRVA configuration. Adds this AVPlayer to the
+        // tracker registry. Custom attributes ride on every event from this
+        // playback session.
+        nrvaTrackerId = NewRelicSetup.addAVPlayer(
+            player,
+            name: item.id,
+            customAttributes: [
+                "contentTitle": item.title,
+                "isLive": item.isLive,
+            ]
+        )
+        AppLog.shared.log(.event, "Player", "NRVA tracker added",
+                          ["trackerId": nrvaTrackerId])
 
         timeControlObs = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
             Task { @MainActor in self?.logTimeControl(p.timeControlStatus, reason: p.reasonForWaitingToPlay) }
@@ -117,6 +132,12 @@ final class PlayerModel: ObservableObject {
         let durationMs = Int(Date().timeIntervalSince(startedAt ?? Date()) * 1000)
         AppLog.shared.log(.event, "Player", "stop",
                           ["id": contentId, "session_ms": durationMs])
+
+        // Level 2: release the per-player NRVA tracker.
+        if nrvaTrackerId >= 0 {
+            NewRelicSetup.releaseAVPlayer(trackerId: nrvaTrackerId)
+            nrvaTrackerId = -1
+        }
 
         timeControlObs?.invalidate(); timeControlObs = nil
         rateObs?.invalidate(); rateObs = nil

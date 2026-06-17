@@ -65,16 +65,18 @@ SCHEME="${SCHEME:-$DEFAULT_SCHEME}"
 OS_VERSION="${OS_VERSION:-}"
 APP_PATH="$DERIVED_DATA/Build/Products/$BUILD_PRODUCTS_DIR/NRSampleApp.app"
 
-# Default scenarios — id:duration_secs.
-# Each video plays for that many seconds of REAL playback then is killed.
-# Tune per-scenario as needed. Apple BipBop streams are ~30 min total;
-# 60s of real playback is plenty to verify decode+render+no-error.
-# Order: cheap VODs first (fast feedback), then live (longest).
+# Default scenarios — id:mode where mode is one of:
+#   end       — play to natural didPlayToEnd; safety cap = VOD_SAFETY_CAP secs
+#   end=N     — play to natural end; safety cap = N secs
+#   fixed=N   — play exactly N seconds (used for live streams that never end)
+# Order: shorter VODs first (fast feedback), then live last.
+VOD_SAFETY_CAP=3600   # 60 min cap so a hung stream doesn't stall CI forever
+
 DEFAULT_SCENARIOS=(
-  "bipbop-adv:60"
-  "bipbop-basic:60"
-  "big-buck-bunny:60"
-  "akamai-live:1800"
+  "bipbop-adv:end"
+  "bipbop-basic:end"
+  "big-buck-bunny:end"
+  "akamai-live:fixed=1800"
 )
 
 # Optional subset via SCENARIOS=foo,bar
@@ -126,9 +128,16 @@ xcrun simctl bootstatus "$DEVICE_ID" -b
 # Bring the simulator window forward so a human can watch playback.
 open -a Simulator || true
 
-echo "==> Building $SCHEME"
+echo "==> pod install"
+pod install --repo-update > "$ARTIFACTS_DIR/pod-install.log" 2>&1 || {
+  echo "pod install failed:"
+  tail -30 "$ARTIFACTS_DIR/pod-install.log"
+  exit 1
+}
+
+echo "==> Building $SCHEME (workspace)"
 xcodebuild build \
-  -project NRSampleApp.xcodeproj \
+  -workspace NRSampleApp.xcworkspace \
   -scheme "$SCHEME" \
   -configuration Debug \
   -destination "id=$DEVICE_ID" \
@@ -154,19 +163,43 @@ SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
   echo "Device:       $DEVICE_NAME ($DEVICE_ID)"
   echo "OS:           ${OS_VERSION:-(default)}"
   echo "Scenarios:    ${#RUN_LIST[@]}"
+  echo "NRVA token:   ${NEW_RELIC_APP_TOKEN:+set}${NEW_RELIC_APP_TOKEN:-(not set)}"
+  echo "NRVA collector: ${NEW_RELIC_COLLECTOR_ADDRESS:-(default)}"
   echo ""
-  printf "%-20s %-10s %-8s %-7s %-10s\n" "id" "duration" "events" "fails" "result"
-  printf "%-20s %-10s %-8s %-7s %-10s\n" "----" "--------" "------" "-----" "------"
+  printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" "id" "mode" "elapsed" "events" "fails" "result"
+  printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" "----" "----" "-------" "------" "-----" "------"
 } > "$SUMMARY"
 
 OVERALL_RC=0
 
 run_one_scenario() {
   local ID="$1"
-  local DURATION="$2"
+  local SPEC="$2"
+
+  # Parse mode and cap from SPEC.
+  local MODE
+  local CAP_SECS
+  case "$SPEC" in
+    end)
+      MODE=end
+      CAP_SECS=$VOD_SAFETY_CAP
+      ;;
+    end=*)
+      MODE=end
+      CAP_SECS="${SPEC#end=}"
+      ;;
+    fixed=*)
+      MODE=fixed
+      CAP_SECS="${SPEC#fixed=}"
+      ;;
+    *)
+      echo "    ERROR: unknown spec '$SPEC' (use end, end=N, or fixed=N)"
+      return 2
+      ;;
+  esac
 
   echo ""
-  echo "==> $ID  (duration=${DURATION}s)"
+  echo "==> $ID  (mode=$MODE  cap=${CAP_SECS}s)"
 
   # Make sure no stale instance is running.
   xcrun simctl terminate "$DEVICE_ID" "$APP_BUNDLE_ID" 2>/dev/null || true
@@ -176,45 +209,58 @@ run_one_scenario() {
   # (iOS Simulator pauses video render when its window is occluded).
   osascript -e 'tell application "Simulator" to activate' 2>/dev/null || true
 
-  # Launch the app with the auto-play arg. RootView picks up the arg,
-  # redirects logs to auto-play-<ID>.log (truncated), navigates to the
-  # player, and starts real playback.
+  # Pass NewRelic config to the app via launchctl env vars (the simulator's
+  # launchd inherits these to processes it spawns).
+  if [ -n "${NEW_RELIC_APP_TOKEN:-}" ]; then
+    xcrun simctl spawn "$DEVICE_ID" launchctl setenv NEW_RELIC_APP_TOKEN "$NEW_RELIC_APP_TOKEN" 2>/dev/null || true
+  fi
+  if [ -n "${NEW_RELIC_COLLECTOR_ADDRESS:-}" ]; then
+    xcrun simctl spawn "$DEVICE_ID" launchctl setenv NEW_RELIC_COLLECTOR_ADDRESS "$NEW_RELIC_COLLECTOR_ADDRESS" 2>/dev/null || true
+  fi
+
+  # Launch the app with the auto-play arg.
   xcrun simctl launch "$DEVICE_ID" "$APP_BUNDLE_ID" --auto-play "$ID" > /dev/null
-  echo "    launched · video rendering in simulator for ${DURATION}s"
+  echo "    launched · ${MODE} mode · capped at ${CAP_SECS}s"
 
   # Find the log file inside the app's data container.
   CONTAINER=$(xcrun simctl get_app_container "$DEVICE_ID" "$APP_BUNDLE_ID" data 2>/dev/null || true)
   local LOG_FILE="$CONTAINER/Documents/logs/auto-play-$ID.log"
 
-  # Mid-playback screenshot: capture at 25% through (or 30s, whichever sooner).
-  local SHOT_AT=$(( DURATION < 120 ? DURATION / 4 : 30 ))
+  # Mid-playback screenshot: capture at 30s in (or 25% through, whichever sooner).
+  local SHOT_AT=$(( CAP_SECS < 120 ? CAP_SECS / 4 : 30 ))
   ( sleep "$SHOT_AT" && xcrun simctl io "$DEVICE_ID" screenshot "$ARTIFACTS_DIR/$ID-screenshot.png" 2>/dev/null ) &
   local SHOT_PID=$!
 
-  # Sleep the duration. Print progress every 60s for long runs.
+  # Wait loop.
   local ELAPSED=0
-  while [ $ELAPSED -lt $DURATION ]; do
+  local NATURAL_END=0
+  while [ $ELAPSED -lt $CAP_SECS ]; do
     sleep 5
     ELAPSED=$((ELAPSED + 5))
 
-    # Early-exit on FAIL events — no need to wait the full duration.
-    if [ -f "$LOG_FILE" ] && grep -q "\[FAIL " "$LOG_FILE" 2>/dev/null; then
-      echo "    [FAIL] event detected at ${ELAPSED}s — stopping early"
-      break
+    if [ -f "$LOG_FILE" ]; then
+      # Always early-exit on FAIL.
+      if grep -q "\[FAIL " "$LOG_FILE" 2>/dev/null; then
+        echo "    [FAIL] event detected at ${ELAPSED}s — stopping"
+        break
+      fi
+      # Natural end only matters in `end` mode.
+      if [ "$MODE" = "end" ] && grep -q "Player didPlayToEnd" "$LOG_FILE" 2>/dev/null; then
+        NATURAL_END=1
+        echo "    didPlayToEnd at ${ELAPSED}s — natural end"
+        break
+      fi
     fi
 
     if [ $((ELAPSED % 60)) -eq 0 ]; then
-      echo "    still playing... ${ELAPSED}s / ${DURATION}s"
+      echo "    still playing... ${ELAPSED}s / ${CAP_SECS}s"
     fi
   done
 
-  # Make sure screenshot finished.
   wait $SHOT_PID 2>/dev/null || true
-
-  # Stop the app cleanly.
   xcrun simctl terminate "$DEVICE_ID" "$APP_BUNDLE_ID" 2>/dev/null || true
 
-  # Copy logs to artifacts.
+  # Copy logs.
   local DEST="$ARTIFACTS_DIR/$ID"
   mkdir -p "$DEST"
   if [ -n "${CONTAINER:-}" ] && [ -d "$CONTAINER/Documents/logs" ]; then
@@ -233,21 +279,23 @@ run_one_scenario() {
   local RESULT
   if [ "$FAIL_COUNT" -gt 0 ]; then
     RESULT="fail"
+  elif [ "$MODE" = "end" ] && [ "$NATURAL_END" -eq 0 ]; then
+    RESULT="cap-hit"   # ran to safety cap without natural end
   else
     RESULT="ok"
   fi
 
   echo "    result=$RESULT  events=$EVENT_COUNT  fails=$FAIL_COUNT"
-  printf "%-20s %-10s %-8s %-7s %-10s\n" \
-    "$ID" "${DURATION}s" "$EVENT_COUNT" "$FAIL_COUNT" "$RESULT" >> "$SUMMARY"
+  printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" \
+    "$ID" "$MODE" "${ELAPSED}s" "$EVENT_COUNT" "$FAIL_COUNT" "$RESULT" >> "$SUMMARY"
 
   [ "$RESULT" = "ok" ] || return 1
 }
 
 for entry in "${RUN_LIST[@]}"; do
   ID="${entry%%:*}"
-  DURATION="${entry##*:}"
-  run_one_scenario "$ID" "$DURATION" || OVERALL_RC=1
+  SPEC="${entry#*:}"
+  run_one_scenario "$ID" "$SPEC" || OVERALL_RC=1
 done
 
 echo ""

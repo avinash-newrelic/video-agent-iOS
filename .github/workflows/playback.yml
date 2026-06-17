@@ -40,7 +40,7 @@ jobs:
   playback:
     name: ${{ matrix.tag }}
     runs-on: macos-14
-    timeout-minutes: 90
+    timeout-minutes: 120   # play-to-end VODs + 30 min live + iOS 16 runtime download
 
     strategy:
       fail-fast: false
@@ -142,6 +142,12 @@ jobs:
                 && format('auto-{0}', matrix.tag)
                 || matrix.device }}
           OS_VERSION: ${{ matrix.os_version }}
+          # NewRelic config — set as repo secrets:
+          #   NEW_RELIC_APP_TOKEN          (required to send events)
+          #   NEW_RELIC_COLLECTOR_ADDRESS  (optional; e.g.
+          #                                'staging-mobile-collector.newrelic.com')
+          NEW_RELIC_APP_TOKEN: ${{ secrets.NEW_RELIC_APP_TOKEN }}
+          NEW_RELIC_COLLECTOR_ADDRESS: ${{ secrets.NEW_RELIC_COLLECTOR_ADDRESS }}
         run: ./scripts/run-playback.sh
 
       - name: Upload artifacts
