@@ -1,0 +1,14 @@
+# XcodeGen output — regenerate with `xcodegen generate`
+*.xcodeproj/
+
+# CocoaPods output — regenerate with `pod install`
+Pods/
+*.xcworkspace/
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# macOS
+.DS_Store

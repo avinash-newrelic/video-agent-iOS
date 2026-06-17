@@ -1,0 +1,26 @@
+platform :ios, '15.0'
+use_frameworks!
+
+# Reference the agent via local path so any change to the agent's source
+# (NewRelicVideoCore, NRAVPlayerTracker, NRIMATracker) is picked up by the
+# next `pod install` without needing a published version.
+LOCAL_AGENT_PATH = '../../../'
+
+target 'NRSampleApp' do
+  pod 'NewRelicVideoAgent', :path => LOCAL_AGENT_PATH
+  pod 'NRAVPlayerTracker',  :path => LOCAL_AGENT_PATH
+  pod 'NRIMATracker',       :path => LOCAL_AGENT_PATH
+
+  target 'NRSampleAppUITests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64' unless `uname -m`.strip == 'arm64'
+    end
+  end
+end
