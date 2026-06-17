@@ -1,17 +1,16 @@
 import SwiftUI
 
-/// Slide-up overlay showing NRVA events as they fire.
+/// Slide-up overlay showing scenario events as they fire.
 ///
-/// XCUITest reads this overlay's text to assert which events were emitted
-/// during a scenario. Each event row carries an accessibility identifier
-/// of the form `event.<EVENT_NAME>` so tests can match precisely.
+/// XCUITest reads this overlay's text to assert which events were emitted.
+/// Each event row carries an accessibility identifier of the form
+/// `event.<EVENT_NAME>` so tests can match precisely.
 ///
-/// Skeleton commit: the events array is local state; it will later be
-/// driven by NRVAEventTap (see NewRelicSetup.swift).
+/// Backed by `EventBus.shared`. See EventBus.swift for the event source policy.
 struct EventLogOverlay: View {
 
     @State private var isExpanded = false
-    @State private var events: [LoggedEvent] = []
+    @ObservedObject private var bus = EventBus.shared
 
     var body: some View {
         VStack {
@@ -34,12 +33,11 @@ struct EventLogOverlay: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
-                Text("Events (\(events.count))")
+                Text("Events (\(bus.events.count))")
                     .font(.system(.subheadline, design: .monospaced))
                 Spacer()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16).padding(.vertical, 12)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("event-log-handle")
@@ -48,7 +46,7 @@ struct EventLogOverlay: View {
     private var eventList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 4) {
-                ForEach(events) { event in
+                ForEach(bus.events) { event in
                     HStack(spacing: 8) {
                         Text(event.timestamp.formatted(.dateTime.hour().minute().second()))
                             .foregroundStyle(.tertiary)
@@ -58,16 +56,9 @@ struct EventLogOverlay: View {
                     .accessibilityIdentifier("event.\(event.name)")
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 16).padding(.bottom, 12)
         }
         .frame(maxHeight: 240)
-    }
-
-    struct LoggedEvent: Identifiable {
-        let id = UUID()
-        let timestamp: Date
-        let name: String
     }
 }
 
