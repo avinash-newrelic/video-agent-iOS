@@ -13,6 +13,11 @@ struct ContentItem: Identifiable, Hashable, Codable {
     let durationSecs: Int?
     let isLive: Bool
     let section: Section
+    /// Optional Google IMA ad tag URL. When set, the app routes the
+    /// scenario to `IMAPlayerView` (iOS only) which loads + plays ads
+    /// via the IMA SDK and forwards every event to NRVA. nil means
+    /// content-only playback through the regular `PlayerView`.
+    let imaTagURL: URL?
 
     enum Section: String, CaseIterable, Hashable, Codable {
         case featured

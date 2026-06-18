@@ -23,7 +23,8 @@ enum ContentCatalog {
             streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
             durationSecs: 600,
             isLive: false,
-            section: .featured
+            section: .featured,
+            imaTagURL: nil
         ),
         ContentItem(
             id: "akamai-live",
@@ -33,7 +34,8 @@ enum ContentCatalog {
             streamURL: URL(string: "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8")!,
             durationSecs: nil,
             isLive: true,
-            section: .live
+            section: .live,
+            imaTagURL: nil
         ),
         ContentItem(
             id: "big-buck-bunny",
@@ -43,7 +45,8 @@ enum ContentCatalog {
             streamURL: URL(string: "https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_720p_h264.mov")!,
             durationSecs: 596,
             isLive: false,
-            section: .vod
+            section: .vod,
+            imaTagURL: nil
         ),
         ContentItem(
             id: "bipbop-basic",
@@ -53,7 +56,34 @@ enum ContentCatalog {
             streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8")!,
             durationSecs: 60,
             isLive: false,
-            section: .vod
+            section: .vod,
+            imaTagURL: nil
+        ),
+
+        // Google IMA — public test ad tags from
+        // https://developers.google.com/interactive-media-ads/docs/sdks/ios/client-side/tags
+        ContentItem(
+            id: "ima-preroll",
+            title: "IMA Pre-roll",
+            subtitle: "Google IMA · single skippable pre-roll ad",
+            posterURL: nil,
+            streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            durationSecs: 600,
+            isLive: false,
+            section: .vod,
+            imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_preroll_skippable&sz=640x480&ciu_szs=300x250&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator=")
+        ),
+
+        ContentItem(
+            id: "ima-vmap",
+            title: "IMA VMAP",
+            subtitle: "Google IMA · pre + mid + post ad pods (VMAP)",
+            posterURL: nil,
+            streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            durationSecs: 600,
+            isLive: false,
+            section: .vod,
+            imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/vmap_ad_samples&sz=640x480&cust_params=sample_ar%3Dpremidpost&ciu_szs=300x250&gdfp_req=1&ad_rule=1&output=vmap&unviewed_position_start=1&env=vp&impl=s&correlator=")
         ),
     ]
 

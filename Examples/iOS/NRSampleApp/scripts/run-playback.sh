@@ -176,6 +176,8 @@ DEFAULT_SCENARIOS=(
   "bipbop-basic:fixed=300"
   "big-buck-bunny:fixed=300"
   "akamai-live:fixed=300"
+  "ima-preroll:fixed=180"     # iOS-only — pre-roll ad + ~2 min of content
+  "ima-vmap:fixed=300"         # iOS-only — pre + mid + post ad pods
 )
 
 if [ -n "${SCENARIOS:-}" ]; then

@@ -10,7 +10,7 @@ struct RootView: View {
     var body: some View {
         if let item = autoPlayItem() {
             NavigationView {
-                PlayerView(item: item)
+                playerView(for: item)
             }
             .navigationViewStyle(.stack)
             .onAppear {
@@ -26,6 +26,23 @@ struct RootView: View {
         } else {
             HomeView()
         }
+    }
+
+    /// Pick the right player view for the scenario.
+    /// IMA-flagged scenarios (imaTagURL set) route to IMAPlayerView on iOS.
+    /// Everything else (and tvOS for IMA scenarios) goes through PlayerView.
+    @ViewBuilder
+    private func playerView(for item: ContentItem) -> some View {
+        #if os(iOS)
+        if item.imaTagURL != nil {
+            IMAPlayerView(item: item)
+        } else {
+            PlayerView(item: item)
+        }
+        #else
+        // tvOS: skip IMA wiring for now; play content only.
+        PlayerView(item: item)
+        #endif
     }
 
     /// If launched with `--auto-play <id>`, returns the matching ContentItem.
