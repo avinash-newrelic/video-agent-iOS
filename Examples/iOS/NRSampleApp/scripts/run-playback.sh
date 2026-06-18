@@ -249,8 +249,8 @@ SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
   echo "Debug log:    $NR_DEBUG"
   echo "Collector:    ${NR_COLLECTOR:+(custom-set)}${NR_COLLECTOR:-(default)}"
   echo ""
-  printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" "id" "mode" "elapsed" "events" "fails" "result"
-  printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" "----" "----" "-------" "------" "-----" "------"
+  printf "%-20s %-10s %-10s %-8s %-7s %-10s %s\n" "id" "mode" "elapsed" "events" "fails" "result" "viewId"
+  printf "%-20s %-10s %-10s %-8s %-7s %-10s %s\n" "----" "----" "-------" "------" "-----" "------" "-------"
 } > "$SUMMARY"
 
 OVERALL_RC=0
@@ -363,6 +363,18 @@ run_one_scenario() {
     FAIL_COUNT=$(grep -c  "\[FAIL"  "$SCEN_LOG" || true)
   fi
 
+  # Extract NRVA viewId for this scenario. NRVA stamps every event of a
+  # single playback session with a unique viewId. With debug logging on,
+  # it appears in simulator.log / syslog.log as e.g.:
+  #   viewId = "AAE31F6C-...-17817078814419-0";
+  # Falls back to "(not-found)" when NRVA is disabled (no token).
+  local VIEW_ID
+  VIEW_ID=$(grep -m1 -h 'viewId = "' \
+              "$DEST/simulator.log" "$DEST/syslog.log" 2>/dev/null \
+              | head -1 \
+              | sed -nE 's/.*viewId = "([^"]+)".*/\1/p')
+  [ -z "${VIEW_ID:-}" ] && VIEW_ID="(not-found)"
+
   local RESULT
   if [ "$FAIL_COUNT" -gt 0 ]; then
     RESULT="fail"
@@ -372,10 +384,10 @@ run_one_scenario() {
     RESULT="ok"
   fi
 
-  echo "    result=$RESULT  events=$EVENT_COUNT  fails=$FAIL_COUNT"
+  echo "    result=$RESULT  events=$EVENT_COUNT  fails=$FAIL_COUNT  viewId=$VIEW_ID"
   echo "    [SCENARIO DONE] $ID → $RESULT (continuing)"
-  printf "%-20s %-10s %-10s %-8s %-7s %-10s\n" \
-    "$ID" "$MODE" "${ELAPSED}s" "$EVENT_COUNT" "$FAIL_COUNT" "$RESULT" >> "$SUMMARY"
+  printf "%-20s %-10s %-10s %-8s %-7s %-10s %s\n" \
+    "$ID" "$MODE" "${ELAPSED}s" "$EVENT_COUNT" "$FAIL_COUNT" "$RESULT" "$VIEW_ID" >> "$SUMMARY"
   [ "$RESULT" = "ok" ] || return 1
 }
 
