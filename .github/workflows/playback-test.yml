@@ -179,8 +179,12 @@ jobs:
           SCENARIOS: ${{ inputs.scenarios }}
           LEG_TAG: ${{ inputs.leg_tag }}
           NRVA_VERSION: ${{ inputs.nrva_version }}
+        # No `set -e`/`-u`/`-o pipefail`: this is a long shell pipeline with
+        # many commands that legitimately exit non-zero (grep finding nothing,
+        # log capture being killed, simctl returning the app's exit code).
+        # Each command guarded explicitly with `|| true` / defaults.
         run: |
-          set -uo pipefail
+          set -x
           mkdir -p "$ARTIFACTS_DIR"
 
           SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
@@ -195,6 +199,15 @@ jobs:
             echo "----------------------------------------------------------------------"
           } > "$SUMMARY"
 
+          # Resolve the app's sandbox log dir once — the data container exists
+          # because we already installed + (in the env-inject step) booted.
+          APP_DATA_DIR=$(xcrun simctl get_app_container "$DEVICE_ID" "$BUNDLE_ID" data 2>/dev/null) || APP_DATA_DIR=""
+          if [ -z "$APP_DATA_DIR" ]; then
+            echo "::warning::could not resolve app data container — log polling will fall back to wait-only"
+          fi
+          APP_LOG_DIR="$APP_DATA_DIR/Documents/logs"
+          echo "App log dir: $APP_LOG_DIR"
+
           IFS=',' read -ra SCEN_LIST <<< "$SCENARIOS"
           for sid in "${SCEN_LIST[@]}"; do
             sid=$(echo "$sid" | tr -d ' ')
@@ -203,60 +216,67 @@ jobs:
             SCEN_DIR="$ARTIFACTS_DIR/$sid"
             mkdir -p "$SCEN_DIR"
             LOG_FILE="$SCEN_DIR/auto-play-$sid.log"
-            CONSOLE_LOG="$SCEN_DIR/simulator-console.log"
             SYSLOG="$SCEN_DIR/syslog.log"
+            APP_LOG="$APP_LOG_DIR/auto-play-$sid.log"
+
+            # Clear any stale per-scenario log from a previous iteration so
+            # SCENARIO_DONE detection only fires on this run's sentinel.
+            rm -f "$APP_LOG" 2>/dev/null || true
 
             # Tag scenario id into NRVA env so the app sets it as global attr.
-            xcrun simctl spawn "$DEVICE_ID" launchctl setenv SCENARIO_ID "$sid"
+            xcrun simctl spawn "$DEVICE_ID" launchctl setenv SCENARIO_ID "$sid" || true
 
-            # Begin unified-log capture in background (verbose, scoped to app).
+            # Begin unified-log capture (verbose, scoped to app subsystem).
             xcrun simctl spawn "$DEVICE_ID" log stream --level=debug \
               --predicate "subsystem CONTAINS 'NRSampleApp' OR subsystem CONTAINS 'NewRelicVideo'" \
               > "$SYSLOG" 2>&1 &
             LOG_PID=$!
 
             START=$(date +%s)
-            # Launch app with auto-play arg. --console captures stdout/stderr.
-            xcrun simctl launch --console-pty "$DEVICE_ID" "$BUNDLE_ID" \
-              --auto-play "$sid" \
-              > "$CONSOLE_LOG" 2>&1 &
-            LAUNCH_PID=$!
+            # Plain `simctl launch` returns immediately with the app PID.
+            # No --console / --console-pty: those try to attach to a tty and
+            # interact badly with `&` backgrounding under GitHub Actions.
+            LAUNCH_OUT=$(xcrun simctl launch "$DEVICE_ID" "$BUNDLE_ID" \
+              --auto-play "$sid" 2>&1) || true
+            echo "  launch out: $LAUNCH_OUT"
 
-            # Poll for SCENARIO_DONE sentinel in the per-scenario in-app log,
-            # which the runner reads from the simulator's app sandbox.
-            APP_LOG_DIR=$(xcrun simctl get_app_container "$DEVICE_ID" "$BUNDLE_ID" data)/Documents/logs
+            # Poll the app's sandbox log for SCENARIO_DONE sentinel.
             DONE=0
             for i in $(seq 1 60); do
               sleep 1
-              if [ -f "$APP_LOG_DIR/auto-play-$sid.log" ] && \
-                 grep -q "SCENARIO_DONE" "$APP_LOG_DIR/auto-play-$sid.log" 2>/dev/null; then
-                DONE=1
-                break
+              if [ -n "$APP_LOG_DIR" ] && [ -f "$APP_LOG" ]; then
+                if grep -q "SCENARIO_DONE" "$APP_LOG" 2>/dev/null; then
+                  DONE=1
+                  break
+                fi
               fi
             done
             ELAPSED=$(($(date +%s) - START))
+            echo "  done=$DONE  elapsed=${ELAPSED}s"
 
-            # Copy app's in-sandbox log to artifacts.
-            if [ -f "$APP_LOG_DIR/auto-play-$sid.log" ]; then
-              cp "$APP_LOG_DIR/auto-play-$sid.log" "$LOG_FILE"
+            # Copy app's in-sandbox log to artifacts BEFORE terminate (in case
+            # terminate races with a final flush).
+            if [ -n "$APP_LOG_DIR" ] && [ -f "$APP_LOG" ]; then
+              cp "$APP_LOG" "$LOG_FILE" 2>/dev/null || true
             fi
 
             # Stop unified-log capture, terminate app for next scenario.
             kill "$LOG_PID" 2>/dev/null || true
-            xcrun simctl terminate "$DEVICE_ID" "$BUNDLE_ID" || true
-            wait "$LAUNCH_PID" 2>/dev/null || true
+            xcrun simctl terminate "$DEVICE_ID" "$BUNDLE_ID" 2>/dev/null || true
 
             # Screenshot for forensics.
             xcrun simctl io "$DEVICE_ID" screenshot "$SCEN_DIR/screenshot.png" 2>/dev/null || true
 
-            # Pull viewId for cross-reference with NR UI.
+            # Pull viewId — guard the pipeline against grep-no-match exit 1.
             VIEW_ID="(not-found)"
             if [ -f "$LOG_FILE" ]; then
-              VIEW_ID=$(grep -oE 'viewId=[A-Za-z0-9-]+' "$LOG_FILE" | head -1 | cut -d= -f2)
-              [ -z "$VIEW_ID" ] && VIEW_ID="(not-found)"
+              FOUND=$(grep -oE 'viewId=[A-Za-z0-9-]+' "$LOG_FILE" 2>/dev/null | head -1 || true)
+              if [ -n "$FOUND" ]; then
+                VIEW_ID="${FOUND#viewId=}"
+              fi
             fi
 
-            RESULT=$([ "$DONE" = "1" ] && echo "ok" || echo "timeout")
+            if [ "$DONE" = "1" ]; then RESULT="ok"; else RESULT="timeout"; fi
             printf "%-30s %-10s %-10s %-25s\n" "$sid" "$RESULT" "${ELAPSED}s" "$VIEW_ID" >> "$SUMMARY"
             echo "  $sid → $RESULT (${ELAPSED}s, viewId=$VIEW_ID)"
           done
@@ -264,6 +284,11 @@ jobs:
           echo "" >> "$SUMMARY"
           echo "===== SUMMARY =====" >> "$SUMMARY"
           cat "$SUMMARY"
+
+          # Generator workflow — always succeed even if a scenario timed out.
+          # Telemetry that DID fire still landed in NR UI. SUMMARY.txt records
+          # per-scenario verdicts for forensic review.
+          exit 0
 
       - name: Upload artifacts
         if: always()
