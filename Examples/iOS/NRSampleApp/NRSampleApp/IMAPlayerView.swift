@@ -52,6 +52,7 @@ final class IMAPlayerVC: UIViewController,
     private var nrvaTrackerId: Int = -1
     private var endObserver: NSObjectProtocol?
     private var actionScriptTask: Task<Void, Never>?
+    private var imaInitialized = false
 
     init(item: ContentItem) {
         self.item = item
@@ -65,6 +66,20 @@ final class IMAPlayerVC: UIViewController,
         super.viewDidLoad()
         view.backgroundColor = .black
         setupContentPlayer()
+        // NOTE: do NOT call setupIMA() here. IMA's adsLoader.requestAds
+        // validates that the ad-display container (this view) is attached
+        // to the window hierarchy. In viewDidLoad the view isn't in any
+        // hierarchy yet — the request fails immediately with:
+        //   "Ads cannot be requested because the ad container is not
+        //    attached to the view hierarchy."
+        // Defer to viewDidAppear so the hierarchy is established.
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // Guarded — viewDidAppear can fire multiple times on backgrounding.
+        guard !imaInitialized else { return }
+        imaInitialized = true
         setupIMA()
     }
 
