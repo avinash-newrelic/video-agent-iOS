@@ -1,0 +1,40 @@
+{
+  "_comment": "Default matrix for playback-master.yml. `tag` is the stable identifier (used in workflow inputs, artifact names, and as NRVA global attribute on every event — don't change casually). `display` is the human-friendly UI label.",
+  "legs": [
+    {
+      "tag": "iOS-18-iPhone-16-Pro",
+      "display": "iOS 18 · iPhone 16 Pro",
+      "device": "iPhone 16 Pro",
+      "os_version": "",
+      "platform": "iOS"
+    },
+    {
+      "tag": "iOS-17-iPhone-15",
+      "display": "iOS 17 · iPhone 15",
+      "device": "iPhone 15",
+      "os_version": "",
+      "platform": "iOS"
+    },
+    {
+      "tag": "iOS-16-iPhone-14",
+      "display": "iOS 16 · iPhone 14",
+      "device": "iPhone 14",
+      "os_version": "16.4",
+      "platform": "iOS"
+    },
+    {
+      "tag": "tvOS-18-Apple-TV-4K",
+      "display": "tvOS 18 · Apple TV 4K",
+      "device": "Apple TV 4K (3rd generation)",
+      "os_version": "",
+      "platform": "tvOS"
+    }
+  ],
+  "scenarios": [
+    "content-hls-lifecycle",
+    "content-mp4-lifecycle",
+    "content-error",
+    "ad-vmap-lifecycle",
+    "ad-error"
+  ]
+}

@@ -54,122 +54,93 @@ concurrency:
 
 jobs:
   discover:
-    name: discover NRVA versions + legs + scenarios
+    name: discover
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      versions: ${{ steps.versions.outputs.list }}
-      legs: ${{ steps.legs.outputs.list }}
-      scenarios: ${{ steps.scenarios.outputs.list }}
-      trigger_time: ${{ steps.meta.outputs.trigger_time }}
+      versions: ${{ steps.r.outputs.versions }}
+      legs: ${{ steps.r.outputs.legs }}
+      scenarios: ${{ steps.r.outputs.scenarios }}
+      trigger_time: ${{ steps.r.outputs.trigger_time }}
     steps:
-      - name: Meta
-        id: meta
-        run: |
-          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          echo "trigger_time=$TS" >> "$GITHUB_OUTPUT"
-          echo "Triggered at $TS"
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/workflows/playback-defaults.json
+          sparse-checkout-cone-mode: false
 
-      - name: Discover NRVA versions
-        id: versions
+      - name: Resolve versions, legs, scenarios
+        id: r
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN:       ${{ github.token }}
           INPUT_VERSIONS: ${{ inputs.versions }}
-          MIN_VERSION: ${{ inputs.min_version || '4.1.0' }}
+          INPUT_LEGS:     ${{ inputs.legs }}
+          INPUT_SCEN:     ${{ inputs.scenarios }}
+          MIN_VERSION:    ${{ inputs.min_version || '4.1.0' }}
+          DEFAULTS_FILE:  .github/workflows/playback-defaults.json
+        # Single-step discover. Reads defaults from a JSON file so this
+        # script stays small (GitHub echoes the whole script in each step's
+        # group header — keeping it short means less log noise).
         run: |
           set -uo pipefail
 
-          # Semver compare via sort -V: pass when version sorts >= MIN_VERSION.
-          # Awk implementation handles N.N.N cleanly without bringing in jq deps.
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "trigger_time=$TS" >> "$GITHUB_OUTPUT"
+
+          # --- Versions: explicit override OR auto-discover ≥ MIN_VERSION
           ge_min() {
             awk -v cur="$1" -v min="$2" 'BEGIN {
-              split(cur, a, "."); split(min, b, ".")
-              for (i=1; i<=3; i++) {
-                ai = a[i] + 0; bi = b[i] + 0
-                if (ai > bi) { print "yes"; exit }
-                if (ai < bi) { print "no";  exit }
+              split(cur,a,"."); split(min,b,".")
+              for (i=1;i<=3;i++) {
+                ai=a[i]+0; bi=b[i]+0
+                if (ai>bi) {print "yes"; exit}
+                if (ai<bi) {print "no";  exit}
               }
               print "yes"
             }'
           }
 
           if [ -n "$INPUT_VERSIONS" ]; then
-            echo "Explicit version override: $INPUT_VERSIONS (min_version filter bypassed)"
-            JSON=$(echo "$INPUT_VERSIONS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' \
-                   | grep -v '^$' | jq -R . | jq -sc .)
+            VERS=$(echo "$INPUT_VERSIONS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$')
           else
-            echo "Auto-discovering tags ≥ v${MIN_VERSION} from newrelic/video-agent-iOS"
-            ALL_TAGS=$(gh release list --repo newrelic/video-agent-iOS --limit 100 --json tagName \
-                       --jq '.[].tagName' \
-                       | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
-                       | sed 's/^v//' \
-                       | sort -V -u)
-            INCLUDED=""
-            EXCLUDED=""
+            ALL=$(gh release list --repo newrelic/video-agent-iOS --limit 100 \
+                  --json tagName --jq '.[].tagName' \
+                  | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V -u)
+            VERS=""; EXCL=""
             while IFS= read -r v; do
               [ -z "$v" ] && continue
-              if [ "$(ge_min "$v" "$MIN_VERSION")" = "yes" ]; then
-                INCLUDED="${INCLUDED}${v}\n"
-              else
-                EXCLUDED="${EXCLUDED}${v}\n"
-              fi
-            done <<< "$ALL_TAGS"
-            INCLUDED_LINE=$(printf '%b' "$INCLUDED" | grep -v '^$' | paste -sd, -)
-            EXCLUDED_LINE=$(printf '%b' "$EXCLUDED" | grep -v '^$' | paste -sd, -)
-            echo "  included (${MIN_VERSION}+): ${INCLUDED_LINE:-<none>}"
-            echo "  excluded (pre-${MIN_VERSION}): ${EXCLUDED_LINE:-<none>}"
-            JSON=$(printf '%b' "$INCLUDED" | grep -v '^$' | jq -R . | jq -sc .)
+              [ "$(ge_min "$v" "$MIN_VERSION")" = "yes" ] \
+                && VERS="${VERS}${v}"$'\n' \
+                || EXCL="${EXCL}${v}"$'\n'
+            done <<< "$ALL"
+            echo "  excluded (pre-${MIN_VERSION}): $(echo "$EXCL" | grep -v '^$' | paste -sd, - || true)"
           fi
-          echo "  matrix JSON: $JSON"
-          echo "list=$JSON" >> "$GITHUB_OUTPUT"
+          VERSIONS_JSON=$(echo "$VERS" | grep -v '^$' | jq -R . | jq -sc .)
 
-      - name: Resolve leg matrix
-        id: legs
-        env:
-          INPUT_LEGS: ${{ inputs.legs }}
-        run: |
-          set -uo pipefail
-          # Default 4-leg matrix. Override via comma-separated input.
-          # `tag` is the stable identifier — used in workflow inputs,
-          # artifact names, and as an NRVA global attribute on every
-          # event. Don't change these casually; you'll fragment NR UI
-          # history. `display` is the human-friendly form used in the
-          # Actions UI and run summary.
-          DEFAULT='[
-            {"tag":"iOS-18-iPhone-16-Pro","display":"iOS 18 · iPhone 16 Pro","device":"iPhone 16 Pro","os_version":"","platform":"iOS"},
-            {"tag":"iOS-17-iPhone-15","display":"iOS 17 · iPhone 15","device":"iPhone 15","os_version":"","platform":"iOS"},
-            {"tag":"iOS-16-iPhone-14","display":"iOS 16 · iPhone 14","device":"iPhone 14","os_version":"16.4","platform":"iOS"},
-            {"tag":"tvOS-18-Apple-TV-4K","display":"tvOS 18 · Apple TV 4K","device":"Apple TV 4K (3rd generation)","os_version":"","platform":"tvOS"}
-          ]'
+          # --- Legs: filter from JSON file if input supplied
           if [ -n "$INPUT_LEGS" ]; then
-            REQUESTED=$(echo "$INPUT_LEGS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | jq -R . | jq -sc .)
-            JSON=$(jq -c --argjson req "$REQUESTED" '[.[] | select(.tag | IN($req[]))]' <<<"$DEFAULT")
+            REQ=$(echo "$INPUT_LEGS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | jq -R . | jq -sc .)
+            LEGS_JSON=$(jq -c --argjson req "$REQ" '[.legs[] | select(.tag | IN($req[]))]' "$DEFAULTS_FILE")
           else
-            JSON=$(jq -c . <<<"$DEFAULT")
+            LEGS_JSON=$(jq -c '.legs' "$DEFAULTS_FILE")
           fi
-          # Pretty-print: one line per leg, "<display> · <platform>"
-          echo "$JSON" | jq -r '.[] | "  · \(.display // .tag) [\(.platform)]"'
-          echo "list=$JSON" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve scenarios
-        id: scenarios
-        env:
-          INPUT_SCEN: ${{ inputs.scenarios }}
-        run: |
-          set -uo pipefail
-          # Wave 2: full event-coverage set.
-          # Each scenario uses scripted actions to fire a specific subset of
-          # NRVA events. Together they cover every event NRVA emits except
-          # buffer-stall (Wave 3) and DRM (Wave 4).
-          DEFAULT='content-hls-lifecycle,content-mp4-lifecycle,content-error,ad-vmap-lifecycle,ad-error'
+          # --- Scenarios: override OR defaults
           if [ -n "$INPUT_SCEN" ]; then
-            SCEN="$INPUT_SCEN"
+            SCEN_CSV="$INPUT_SCEN"
           else
-            SCEN="$DEFAULT"
+            SCEN_CSV=$(jq -r '.scenarios | join(",")' "$DEFAULTS_FILE")
           fi
-          # Pretty-print one per line
-          echo "$SCEN" | tr ',' '\n' | sed 's/^/  · /'
-          echo "list=$SCEN" >> "$GITHUB_OUTPUT"
+
+          # --- 3 compact summary lines ----
+          echo "  versions:  $(jq -r '. | join(", ")' <<<"$VERSIONS_JSON")"
+          echo "  legs:      $(jq -r '[.[] | .display // .tag] | join(", ")' <<<"$LEGS_JSON")"
+          echo "  scenarios: $SCEN_CSV"
+
+          {
+            echo "versions=$VERSIONS_JSON"
+            echo "legs=$LEGS_JSON"
+            echo "scenarios=$SCEN_CSV"
+          } >> "$GITHUB_OUTPUT"
 
   # --- Build .app per (version × platform) -------------------------------
   build:
