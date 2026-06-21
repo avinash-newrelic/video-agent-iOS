@@ -17,8 +17,8 @@ enum ContentCatalog {
     static let hardcoded: [ContentItem] = [
         // -- Scripted scenarios (Wave 1+) --
         // Each runs the player through a defined sequence of actions to fire
-        // every CONTENT_* event type in NRVA: PAUSE, RESUME, SEEK_START,
-        // SEEK_END, RENDITION_CHANGE, END (via seek-to-near-end).
+        // every NRVA event type: CONTENT_PAUSE, RESUME, SEEK_*, END (via
+        // near-end seek), RENDITION_CHANGE, ERROR, plus AD_* via IMA.
         ContentItem(
             id: "content-hls-lifecycle",
             title: "Content Lifecycle (HLS)",
@@ -36,6 +36,70 @@ enum ContentCatalog {
                 PlayerAction(t: 10, "seek_pct", "50"),
                 PlayerAction(t: 14, "seek_end_offset", "2"),
                 PlayerAction(t: 20, "done"),
+            ]
+        ),
+        ContentItem(
+            id: "content-mp4-lifecycle",
+            title: "Content Lifecycle (Progressive MP4)",
+            subtitle: "Same script as HLS, MP4 source — exercises non-HLS AVPlayer codepath",
+            posterURL: nil,
+            streamURL: URL(string: "https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_720p_h264.mov")!,
+            durationSecs: 596,
+            isLive: false,
+            section: .vod,
+            imaTagURL: nil,
+            actionScript: [
+                PlayerAction(t:  0, "play"),
+                PlayerAction(t:  5, "pause"),
+                PlayerAction(t:  7, "play"),
+                PlayerAction(t: 10, "seek_pct", "50"),
+                PlayerAction(t: 14, "seek_end_offset", "2"),
+                PlayerAction(t: 20, "done"),
+            ]
+        ),
+        ContentItem(
+            id: "content-error",
+            title: "Content Error Path",
+            subtitle: "Unresolvable URL — fires CONTENT_ERROR event",
+            posterURL: nil,
+            streamURL: URL(string: "https://does-not-resolve.example.invalid/foo.m3u8")!,
+            durationSecs: nil,
+            isLive: false,
+            section: .vod,
+            imaTagURL: nil,
+            actionScript: [
+                PlayerAction(t: 0, "play"),
+                PlayerAction(t: 8, "done"),
+            ]
+        ),
+        ContentItem(
+            id: "ad-vmap-lifecycle",
+            title: "Ad VMAP Lifecycle",
+            subtitle: "Pre + mid + post pods · fires every AD_* event",
+            posterURL: nil,
+            streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            durationSecs: 600,
+            isLive: false,
+            section: .vod,
+            imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/vmap_ad_samples&sz=640x480&cust_params=sample_ar%3Dpremidpost&ciu_szs=300x250&gdfp_req=1&ad_rule=1&output=vmap&unviewed_position_start=1&env=vp&impl=s&correlator="),
+            actionScript: [
+                PlayerAction(t:  0, "play"),
+                PlayerAction(t: 45, "done"),
+            ]
+        ),
+        ContentItem(
+            id: "ad-error",
+            title: "Ad Error Fallback",
+            subtitle: "Invalid VAST URL — fires AD_ERROR, content plays via fallback",
+            posterURL: nil,
+            streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            durationSecs: 600,
+            isLive: false,
+            section: .vod,
+            imaTagURL: URL(string: "https://does-not-resolve.example.invalid/vast.xml"),
+            actionScript: [
+                PlayerAction(t:  0, "play"),
+                PlayerAction(t: 12, "done"),
             ]
         ),
 

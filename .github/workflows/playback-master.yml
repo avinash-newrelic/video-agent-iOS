@@ -16,8 +16,7 @@ name: playback-master
 on:
   schedule:
     # 22:53 UTC = 04:23 IST — daily. Off-:00/:30 to avoid GitHub cron contention.
-    # Disabled until smoke-tested. To enable: remove the next line.
-    - cron: '53 22 31 2 *'   # Feb 31 = never fires (placeholder until enabled)
+    - cron: '53 22 * * *'
 
   workflow_dispatch:
     inputs:
@@ -115,8 +114,11 @@ jobs:
           INPUT_SCEN: ${{ inputs.scenarios }}
         run: |
           set -uo pipefail
-          # Wave 1: only one wired scenario.
-          DEFAULT='content-hls-lifecycle'
+          # Wave 2: full event-coverage set.
+          # Each scenario uses scripted actions to fire a specific subset of
+          # NRVA events. Together they cover every event NRVA emits except
+          # buffer-stall (Wave 3) and DRM (Wave 4).
+          DEFAULT='content-hls-lifecycle,content-mp4-lifecycle,content-error,ad-vmap-lifecycle,ad-error'
           if [ -n "$INPUT_SCEN" ]; then
             SCEN="$INPUT_SCEN"
           else

@@ -120,6 +120,24 @@ enum NewRelicSetup {
         NRVAVideo.releaseTracker(trackerId)
     }
 
+    /// Fetch NRVA's internal viewId for a given tracker, if any.
+    /// Returns nil if NRVA is disabled, tracker missing, or session not yet
+    /// established (viewId is allocated on first content event). Callers
+    /// typically wait ~1-2s after `addAVPlayer` to give the tracker a moment.
+    ///
+    /// `NRVAVideo` doesn't expose tracker lookup directly — that lives on
+    /// the lower-level `NewRelicVideoAgent` singleton.
+    static func getViewId(trackerId: Int) -> String? {
+        guard NRVAVideo.isInitialized(), trackerId >= 0 else { return nil }
+        let trackerNum = NSNumber(value: trackerId)
+        let agent = NewRelicVideoAgent.sharedInstance()
+        if let videoTracker = agent.contentTracker(trackerNum) as? NRVideoTracker {
+            let id = videoTracker.getViewId()
+            return id.isEmpty ? nil : id
+        }
+        return nil
+    }
+
     // MARK: - Configuration sources (env vars)
     // Names match NRVAVideoConfiguration.h fields, prefixed NEW_RELIC_*.
 

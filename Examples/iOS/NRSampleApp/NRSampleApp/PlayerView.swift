@@ -79,6 +79,16 @@ final class PlayerModel: ObservableObject {
         AppLog.shared.log(.event, "Player", "NRVA tracker added",
                           ["trackerId": nrvaTrackerId])
 
+        // NRVA's viewId is assigned on the first content event — give it
+        // ~2 s, then log it so the CI runner can extract it into SUMMARY.
+        Task { @MainActor [nrvaTrackerId] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if let viewId = NewRelicSetup.getViewId(trackerId: nrvaTrackerId) {
+                AppLog.shared.log(.event, "Player", "NRVA viewId",
+                                  ["viewId": viewId])
+            }
+        }
+
         timeControlObs = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
             Task { @MainActor in self?.logTimeControl(p.timeControlStatus, reason: p.reasonForWaitingToPlay) }
         }

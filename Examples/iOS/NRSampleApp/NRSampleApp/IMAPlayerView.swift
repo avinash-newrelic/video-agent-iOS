@@ -51,6 +51,7 @@ final class IMAPlayerVC: UIViewController,
     private var adsManager: IMAAdsManager?
     private var nrvaTrackerId: Int = -1
     private var endObserver: NSObjectProtocol?
+    private var actionScriptTask: Task<Void, Never>?
 
     init(item: ContentItem) {
         self.item = item
@@ -98,6 +99,27 @@ final class IMAPlayerVC: UIViewController,
         )
         AppLog.shared.log(.event, "IMAPlayer", "tracker added",
                           ["trackerId": nrvaTrackerId, "id": item.id])
+
+        // NRVA's viewId is assigned on the first event — give it ~2 s, then
+        // log it so the CI runner extracts it into SUMMARY.
+        Task { @MainActor [trackerId = nrvaTrackerId] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if let viewId = NewRelicSetup.getViewId(trackerId: trackerId) {
+                AppLog.shared.log(.event, "IMAPlayer", "NRVA viewId",
+                                  ["viewId": viewId])
+            }
+        }
+
+        // If the scenario has a scripted action sequence, run it. Actions
+        // apply directly to the AVPlayer; some seeks during ads may be
+        // overridden by IMA's content-playhead control, which is expected.
+        if let script = PlayerActionScript.resolve(for: item) {
+            AppLog.shared.log(.event, "Scenario", "starting actionScript",
+                              ["id": item.id, "steps": script.count])
+            actionScriptTask = PlayerActionScript.run(script,
+                                                     on: player,
+                                                     scenarioId: item.id)
+        }
 
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -210,6 +232,7 @@ final class IMAPlayerVC: UIViewController,
     }
 
     deinit {
+        actionScriptTask?.cancel()
         if let endObserver {
             NotificationCenter.default.removeObserver(endObserver)
         }
