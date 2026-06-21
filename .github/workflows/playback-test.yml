@@ -52,12 +52,15 @@ on:
         required: false
         type: string
         default: '{}'
+      collector_address:
+        description: 'NRVA collector hostname. Empty = default prod collector.'
+        required: false
+        type: string
+        default: ''
 
     secrets:
       NEW_RELIC_APP_TOKEN:
         required: false   # missing → NRVA disables itself (no telemetry)
-      NEW_RELIC_COLLECTOR_ADDRESS:
-        required: false
 
 env:
   ARTIFACTS_DIR: ${{ github.workspace }}/playback-artifacts
@@ -134,7 +137,7 @@ jobs:
         env:
           DEVICE_ID: ${{ steps.boot.outputs.device_id }}
           NEW_RELIC_APP_TOKEN: ${{ secrets.NEW_RELIC_APP_TOKEN }}
-          NEW_RELIC_COLLECTOR_ADDRESS: ${{ secrets.NEW_RELIC_COLLECTOR_ADDRESS }}
+          NEW_RELIC_COLLECTOR_ADDRESS: ${{ inputs.collector_address }}
           NRVA_VERSION: ${{ inputs.nrva_version }}
           LEG_TAG: ${{ inputs.leg_tag }}
           RUN_ID: ${{ inputs.run_id }}

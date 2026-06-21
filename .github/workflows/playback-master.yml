@@ -162,6 +162,7 @@ jobs:
       git_sha: ${{ github.sha }}
       trigger_time: ${{ needs.discover.outputs.trigger_time }}
       nr_overrides: ${{ inputs.nr_overrides || '{}' }}
+      collector_address: ${{ vars.NEW_RELIC_COLLECTOR_ADDRESS }}
     secrets: inherit
 
   # --- Summary (no pass/fail gate — generator, not validator) ------------
