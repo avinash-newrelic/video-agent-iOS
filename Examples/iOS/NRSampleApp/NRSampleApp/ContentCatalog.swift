@@ -15,10 +15,11 @@ import Foundation
 enum ContentCatalog {
 
     static let hardcoded: [ContentItem] = [
+        // -- VOD without ads --
         ContentItem(
             id: "bipbop-adv",
             title: "Apple BipBop",
-            subtitle: "HLS adaptive bitrate · iOS reference stream",
+            subtitle: "HLS adaptive bitrate · TS segments · iOS reference stream",
             posterURL: nil,
             streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
             durationSecs: 600,
@@ -27,14 +28,14 @@ enum ContentCatalog {
             imaTagURL: nil
         ),
         ContentItem(
-            id: "akamai-live",
-            title: "Akamai Live",
-            subtitle: "24/7 HLS test stream",
+            id: "mux-tears-of-steel",
+            title: "Tears of Steel (Mux)",
+            subtitle: "HLS adaptive · 12 renditions · alt CDN",
             posterURL: nil,
-            streamURL: URL(string: "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8")!,
-            durationSecs: nil,
-            isLive: true,
-            section: .live,
+            streamURL: URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")!,
+            durationSecs: 734,
+            isLive: false,
+            section: .vod,
             imaTagURL: nil
         ),
         ContentItem(
@@ -49,18 +50,30 @@ enum ContentCatalog {
             imaTagURL: nil
         ),
         ContentItem(
-            id: "bipbop-basic",
-            title: "BipBop Basic",
-            subtitle: "HLS · single bitrate variant",
+            id: "sintel-mp4",
+            title: "Sintel",
+            subtitle: "Progressive MP4 · 1080p · open movie (Blender)",
             posterURL: nil,
-            streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8")!,
-            durationSecs: 60,
+            streamURL: URL(string: "https://download.blender.org/durian/movies/sintel-1024-surround.mp4")!,
+            durationSecs: 888,
+            isLive: false,
+            section: .vod,
+            imaTagURL: nil
+        ),
+        ContentItem(
+            id: "mux-discontinuity",
+            title: "Discontinuity Stream",
+            subtitle: "HLS with EXT-X-DISCONTINUITY tags · NRVA stress test",
+            posterURL: nil,
+            streamURL: URL(string: "https://test-streams.mux.dev/dai-discontinuity-deltatre/manifest.m3u8")!,
+            durationSecs: nil,
             isLive: false,
             section: .vod,
             imaTagURL: nil
         ),
 
-        // Google IMA — public test ad tags from
+        // -- VOD with ads (Google IMA test tags) --
+        // Public test tags from
         // https://developers.google.com/interactive-media-ads/docs/sdks/ios/client-side/tags
         ContentItem(
             id: "ima-preroll",
@@ -73,7 +86,6 @@ enum ContentCatalog {
             section: .vod,
             imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_preroll_skippable&sz=640x480&ciu_szs=300x250&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator=")
         ),
-
         ContentItem(
             id: "ima-vmap",
             title: "IMA VMAP",
@@ -84,6 +96,17 @@ enum ContentCatalog {
             isLive: false,
             section: .vod,
             imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/vmap_ad_samples&sz=640x480&cust_params=sample_ar%3Dpremidpost&ciu_szs=300x250&gdfp_req=1&ad_rule=1&output=vmap&unviewed_position_start=1&env=vp&impl=s&correlator=")
+        ),
+        ContentItem(
+            id: "ima-error",
+            title: "IMA Error Fallback",
+            subtitle: "Google IMA · invalid VAST URL · exercises error path + content fallback",
+            posterURL: nil,
+            streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            durationSecs: 600,
+            isLive: false,
+            section: .vod,
+            imaTagURL: URL(string: "https://does-not-resolve.example.invalid/vast.xml")
         ),
     ]
 

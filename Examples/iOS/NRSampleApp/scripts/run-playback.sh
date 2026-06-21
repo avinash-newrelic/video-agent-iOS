@@ -172,12 +172,14 @@ echo "    appToken=${NEW_RELIC_APP_TOKEN:+(set)}${NEW_RELIC_APP_TOKEN:-(not set)
 # for daily CI.
 VOD_SAFETY_CAP=3600   # only used by `end` mode; defaults below use fixed=300
 DEFAULT_SCENARIOS=(
-  "bipbop-adv:fixed=300"
-  "bipbop-basic:fixed=300"
-  "big-buck-bunny:fixed=300"
-  "akamai-live:fixed=300"
-  "ima-preroll:fixed=180"     # iOS-only — pre-roll ad + ~2 min of content
-  "ima-vmap:fixed=300"         # iOS-only — pre + mid + post ad pods
+  "bipbop-adv:fixed=300"            # HLS adaptive · TS segments
+  "mux-tears-of-steel:fixed=300"    # HLS adaptive · alt CDN
+  "big-buck-bunny:fixed=300"        # Progressive MP4
+  "sintel-mp4:fixed=300"            # Progressive MP4 · 1080p
+  "mux-discontinuity:fixed=300"     # HLS with discontinuity tags
+  "ima-preroll:fixed=180"           # iOS-only · single skippable pre-roll
+  "ima-vmap:fixed=300"              # iOS-only · pre + mid + post ad pods
+  "ima-error:fixed=120"             # iOS-only · error path + content fallback
 )
 
 if [ -n "${SCENARIOS:-}" ]; then

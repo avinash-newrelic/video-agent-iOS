@@ -255,9 +255,31 @@ jobs:
 
       - name: Aggregate green/red across legs
         id: aggregate
+        # No `set -e`: the aggregator must produce a summary even when some leg
+        # artifacts are missing or corrupt (e.g. a cancelled leg uploads partial
+        # files). Explicit exits and `|| default` on every line that might fail.
+        # No `set -u`: variables are defensively initialized inline.
+        # No `set -o pipefail`: grep -c exits 1 on no-match, which previously
+        # cascaded into a silent exit-1 of the whole step.
         run: |
-          set -uo pipefail
-          cd artifacts || { echo "no artifacts to aggregate"; exit 0; }
+          set -x
+
+          echo "== aggregator boot =="
+          if [ ! -d artifacts ]; then
+            echo "::warning::no artifacts/ dir — all legs may have been skipped"
+            {
+              echo "# 🎬 Video Playback — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo ""
+              echo "## ⚠️ No leg artifacts found"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "passed=0" >> "$GITHUB_OUTPUT"
+            echo "failed=0" >> "$GITHUB_OUTPUT"
+            echo "total=0"  >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cd artifacts
+          echo "== artifacts/ contents =="
+          ls -la
 
           {
             echo "# 🎬 Video Playback — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -272,30 +294,47 @@ jobs:
           PASSED=0
           FAILED=0
 
+          # shellcheck disable=SC2231  # we explicitly want word-splitting here
           for dir in playback-*; do
             [ -d "$dir" ] || continue
             TAG=$(echo "$dir" | sed -E 's/^playback-(.*)-[0-9]+$/\1/')
             SUMMARY="$dir/SUMMARY.txt"
             TOTAL=$((TOTAL + 1))
+            echo "== leg $TAG =="
 
             if [ ! -f "$SUMMARY" ]; then
+              echo "  $SUMMARY missing — leg likely cancelled mid-run"
+              ls -la "$dir" || true
               echo "| \`$TAG\` | ⚠️ no summary | — | — | — | (artifact missing) |" >> "$GITHUB_STEP_SUMMARY"
               FAILED=$((FAILED + 1))
               continue
             fi
 
-            OK=$(grep -c " ok "       "$SUMMARY" 2>/dev/null | head -1)
-            FL=$(grep -c " fail "     "$SUMMARY" 2>/dev/null | head -1)
-            CH=$(grep -c " cap-hit "  "$SUMMARY" 2>/dev/null | head -1)
+            # Safe grep-counting: grep -c exits 1 on no-match; capture stdout
+            # then default to 0 on any non-zero exit (matches run-playback.sh fix).
+            OK=$(grep -c " ok "       "$SUMMARY" 2>/dev/null) || OK=0
+            FL=$(grep -c " fail "     "$SUMMARY" 2>/dev/null) || FL=0
+            CH=$(grep -c " cap-hit "  "$SUMMARY" 2>/dev/null) || CH=0
+            # Strip newlines / whitespace just in case
+            OK=${OK//[!0-9]/}; FL=${FL//[!0-9]/}; CH=${CH//[!0-9]/}
             : "${OK:=0}"; : "${FL:=0}"; : "${CH:=0}"
+            echo "  counts: ok=$OK fail=$FL cap=$CH"
 
-            # Build a compact scenario list (id:result, id:result, ...)
-            SCEN=$(awk 'NR>10 && $1 != "----" && $1 != "OVERALL:" && NF>=6 { printf "%s:%s, ", $1, $6 }' "$SUMMARY" | sed 's/, $//')
+            # Build a compact scenario list (id:result, id:result, ...).
+            # The SUMMARY.txt scenario table is bounded by a "----" separator
+            # row above and "OVERALL:" below. Extract only rows between them.
+            # Always succeed — non-fatal.
+            SCEN=$(awk '
+              /^----/         { in_tbl=1; next }
+              /^OVERALL:/     { in_tbl=0; next }
+              in_tbl && NF>=6 { printf "%s:%s, ", $1, $6 }
+            ' "$SUMMARY" 2>/dev/null || true)
+            SCEN=${SCEN%, }
 
-            if [ "$FL" -gt 0 ]; then
+            if [ "$FL" -gt 0 ] 2>/dev/null; then
               STATUS="❌ red"
               FAILED=$((FAILED + 1))
-            elif [ "$CH" -gt 0 ]; then
+            elif [ "$CH" -gt 0 ] 2>/dev/null; then
               STATUS="⚠️ amber"
               PASSED=$((PASSED + 1))
             else
@@ -306,12 +345,14 @@ jobs:
             echo "| \`$TAG\` | $STATUS | $OK | $FL | $CH | $SCEN |" >> "$GITHUB_STEP_SUMMARY"
           done
 
+          echo "== totals: passed=$PASSED failed=$FAILED total=$TOTAL =="
+
           {
             echo ""
-            if [ "$FAILED" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
-              echo "## ✅ All $TOTAL legs passed"
-            elif [ "$TOTAL" -eq 0 ]; then
+            if [ "$TOTAL" -eq 0 ]; then
               echo "## ⚠️ No leg artifacts found (all legs may have been skipped)"
+            elif [ "$FAILED" -eq 0 ]; then
+              echo "## ✅ All $TOTAL legs passed"
             else
               echo "## ❌ $FAILED / $TOTAL legs failed"
             fi
@@ -320,6 +361,7 @@ jobs:
           echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
           echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
           echo "total=$TOTAL"   >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Fail workflow if any leg failed
         if: steps.aggregate.outputs.failed != '0' && steps.aggregate.outputs.failed != ''
