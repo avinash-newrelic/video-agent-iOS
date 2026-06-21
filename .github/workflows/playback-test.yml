@@ -88,11 +88,25 @@ jobs:
 
       - name: Download iOS runtime ${{ inputs.os_version }}
         if: inputs.os_version != ''
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          OS_VERSION: ${{ inputs.os_version }}
+        # xcodebuild -downloadPlatform emits ~100 "Installing (registering
+        # download)..." progress lines that drown out useful output. Pipe
+        # the verbose stream to a file and surface only the final result.
         run: |
-          set -euxo pipefail
-          PLATFORM_FLAG="${{ inputs.platform }}"
-          sudo xcodebuild -downloadPlatform "$PLATFORM_FLAG" -buildVersion "${{ inputs.os_version }}" \
-            || xcodebuild -downloadPlatform "$PLATFORM_FLAG" -buildVersion "${{ inputs.os_version }}"
+          set -uo pipefail
+          LOG=/tmp/runtime-download.log
+          echo "Downloading ${PLATFORM} ${OS_VERSION} runtime (output → ${LOG})"
+          if sudo xcodebuild -downloadPlatform "$PLATFORM" -buildVersion "$OS_VERSION" > "$LOG" 2>&1 \
+             || xcodebuild -downloadPlatform "$PLATFORM" -buildVersion "$OS_VERSION" >> "$LOG" 2>&1; then
+            tail -1 "$LOG"
+            echo "  ✓ runtime installed"
+          else
+            echo "  ✗ runtime install failed:"
+            tail -20 "$LOG"
+            exit 1
+          fi
 
       - name: Boot simulator
         id: boot

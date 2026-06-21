@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Decides what the app shows on launch:
 ///   - With `--auto-play <id>` → opens directly into the player for that item
-///     and logs the auto-play handoff. Used by `scripts/run-playback.sh`
-///     and the GitHub Actions workflow.
+///     and logs the auto-play handoff. Used by the `playback-test.yml`
+///     GitHub Actions workflow when running scripted scenarios.
 ///   - Otherwise → the normal `HomeView` catalog.
 struct RootView: View {
 

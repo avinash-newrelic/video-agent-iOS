@@ -11,7 +11,8 @@ import Foundation
 ///   ]
 ///
 /// Set in Xcode scheme env vars locally, or via GitHub Actions vars/inputs
-/// in CI. `scripts/run-playback.sh` forwards the env into the simulator.
+/// in CI. The `playback-test.yml` workflow forwards env into the simulator
+/// via `xcrun simctl spawn launchctl setenv` before each app launch.
 enum ContentCatalog {
 
     static let hardcoded: [ContentItem] = [

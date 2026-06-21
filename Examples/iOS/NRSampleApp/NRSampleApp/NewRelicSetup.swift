@@ -14,8 +14,9 @@ import NewRelicVideoCore
 //
 // All NRVA knobs are configurable via environment variables. Set them in
 // the Xcode scheme (local) or via GitHub Actions vars/secrets (CI).
-// `scripts/run-playback.sh` forwards env vars into the simulator's launchd
-// before each launch, so the app process inherits them.
+// The `playback-test.yml` workflow forwards env into the simulator's
+// launchd via `xcrun simctl spawn launchctl setenv` before each launch,
+// so the app process inherits them.
 
 enum NewRelicSetup {
 

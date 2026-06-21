@@ -114,12 +114,13 @@ jobs:
                 EXCLUDED="${EXCLUDED}${v}\n"
               fi
             done <<< "$ALL_TAGS"
-            echo "Included:"; printf '  %b' "$INCLUDED"
-            echo "Excluded (pre-${MIN_VERSION} — can't route to staging or won't build):"
-            printf '  %b' "$EXCLUDED"
+            INCLUDED_LINE=$(printf '%b' "$INCLUDED" | grep -v '^$' | paste -sd, -)
+            EXCLUDED_LINE=$(printf '%b' "$EXCLUDED" | grep -v '^$' | paste -sd, -)
+            echo "  included (${MIN_VERSION}+): ${INCLUDED_LINE:-<none>}"
+            echo "  excluded (pre-${MIN_VERSION}): ${EXCLUDED_LINE:-<none>}"
             JSON=$(printf '%b' "$INCLUDED" | grep -v '^$' | jq -R . | jq -sc .)
           fi
-          echo "Versions matrix JSON: $JSON"
+          echo "  matrix JSON: $JSON"
           echo "list=$JSON" >> "$GITHUB_OUTPUT"
 
       - name: Resolve leg matrix
@@ -146,7 +147,8 @@ jobs:
           else
             JSON=$(jq -c . <<<"$DEFAULT")
           fi
-          echo "Legs: $JSON"
+          # Pretty-print: one line per leg, "<display> · <platform>"
+          echo "$JSON" | jq -r '.[] | "  · \(.display // .tag) [\(.platform)]"'
           echo "list=$JSON" >> "$GITHUB_OUTPUT"
 
       - name: Resolve scenarios
@@ -165,7 +167,8 @@ jobs:
           else
             SCEN="$DEFAULT"
           fi
-          echo "Scenarios: $SCEN"
+          # Pretty-print one per line
+          echo "$SCEN" | tr ',' '\n' | sed 's/^/  · /'
           echo "list=$SCEN" >> "$GITHUB_OUTPUT"
 
   # --- Build .app per (version × platform) -------------------------------
