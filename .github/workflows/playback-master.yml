@@ -36,6 +36,14 @@ on:
         description: 'JSON of per-run NRVA overrides, e.g. {"harvest_cycle_secs":5}'
         required: false
         default: '{}'
+      min_version:
+        description: >-
+          Minimum NRVA version (inclusive) for matrix. Default 4.1.0 — first
+          tag that has both withCollectorAddress and withQoeAggregateEnabled,
+          which our setup calls unconditionally. Lower than this either won't
+          build or can't route to staging.
+        required: false
+        default: '4.1.0'
 
 permissions:
   contents: read
@@ -67,23 +75,51 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSIONS: ${{ inputs.versions }}
+          MIN_VERSION: ${{ inputs.min_version || '4.1.0' }}
         run: |
           set -uo pipefail
+
+          # Semver compare via sort -V: pass when version sorts >= MIN_VERSION.
+          # Awk implementation handles N.N.N cleanly without bringing in jq deps.
+          ge_min() {
+            awk -v cur="$1" -v min="$2" 'BEGIN {
+              split(cur, a, "."); split(min, b, ".")
+              for (i=1; i<=3; i++) {
+                ai = a[i] + 0; bi = b[i] + 0
+                if (ai > bi) { print "yes"; exit }
+                if (ai < bi) { print "no";  exit }
+              }
+              print "yes"
+            }'
+          }
+
           if [ -n "$INPUT_VERSIONS" ]; then
-            echo "Using explicit version override: $INPUT_VERSIONS"
+            echo "Explicit version override: $INPUT_VERSIONS (min_version filter bypassed)"
             JSON=$(echo "$INPUT_VERSIONS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' \
                    | grep -v '^$' | jq -R . | jq -sc .)
           else
-            echo "Auto-discovering tags ≥ v3.0.0 from newrelic/video-agent-iOS"
-            # Get up to 100 latest releases, keep tags that are vX.Y.Z with X>=3.
-            TAGS=$(gh release list --repo newrelic/video-agent-iOS --limit 100 --json tagName \
-                   --jq '.[].tagName' \
-                   | grep -E '^v?[3-9][0-9]*\.[0-9]+\.[0-9]+$' \
-                   | sed 's/^v//' \
-                   | sort -V -u)
-            JSON=$(echo "$TAGS" | jq -R . | jq -sc .)
+            echo "Auto-discovering tags ≥ v${MIN_VERSION} from newrelic/video-agent-iOS"
+            ALL_TAGS=$(gh release list --repo newrelic/video-agent-iOS --limit 100 --json tagName \
+                       --jq '.[].tagName' \
+                       | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+                       | sed 's/^v//' \
+                       | sort -V -u)
+            INCLUDED=""
+            EXCLUDED=""
+            while IFS= read -r v; do
+              [ -z "$v" ] && continue
+              if [ "$(ge_min "$v" "$MIN_VERSION")" = "yes" ]; then
+                INCLUDED="${INCLUDED}${v}\n"
+              else
+                EXCLUDED="${EXCLUDED}${v}\n"
+              fi
+            done <<< "$ALL_TAGS"
+            echo "Included:"; printf '  %b' "$INCLUDED"
+            echo "Excluded (pre-${MIN_VERSION} — can't route to staging or won't build):"
+            printf '  %b' "$EXCLUDED"
+            JSON=$(printf '%b' "$INCLUDED" | grep -v '^$' | jq -R . | jq -sc .)
           fi
-          echo "Versions: $JSON"
+          echo "Versions matrix JSON: $JSON"
           echo "list=$JSON" >> "$GITHUB_OUTPUT"
 
       - name: Resolve leg matrix
