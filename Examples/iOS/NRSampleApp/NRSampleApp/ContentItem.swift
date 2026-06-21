@@ -18,6 +18,11 @@ struct ContentItem: Identifiable, Hashable, Codable {
     /// via the IMA SDK and forwards every event to NRVA. nil means
     /// content-only playback through the regular `PlayerView`.
     let imaTagURL: URL?
+    /// Optional scripted player actions (play/pause/seek/done) executed
+    /// at offsets in seconds from scenario start. Used to fire NRVA events
+    /// that wouldn't occur in passive playback (CONTENT_PAUSE, SEEK_*, END).
+    /// Workflow can override via `--action-script <json>` launch arg.
+    let actionScript: [PlayerAction]?
 
     enum Section: String, CaseIterable, Hashable, Codable {
         case featured

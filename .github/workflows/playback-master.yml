@@ -1,0 +1,198 @@
+name: playback-master
+
+# Master telemetry-generator workflow.
+#
+# Discovers NRVA versions to test (from GitHub releases of
+# newrelic/video-agent-iOS, filtered ≥ v3.0.0), then fans out to:
+#   - playback-build.yml — one .app per (version, platform)
+#   - playback-test.yml  — one test job per (version, leg) reusing .app
+#
+# Purpose: push NRVA telemetry to a New Relic account from multiple agent
+# versions, multiple OS legs. No verification / pass-fail gate — events
+# land in NR UI, you eyeball them.
+#
+# Lives only on fork branch `internal/video-rig`. Never merged to master.
+
+on:
+  schedule:
+    # 22:53 UTC = 04:23 IST — daily. Off-:00/:30 to avoid GitHub cron contention.
+    # Disabled until smoke-tested. To enable: remove the next line.
+    - cron: '53 22 31 2 *'   # Feb 31 = never fires (placeholder until enabled)
+
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Comma-separated NRVA versions, empty = all tags ≥ v3.0.0'
+        required: false
+        default: ''
+      legs:
+        description: 'Comma-separated leg tags. Empty = default 4 legs.'
+        required: false
+        default: ''
+      scenarios:
+        description: 'Comma-separated scenario ids. Empty = default scenario set.'
+        required: false
+        default: ''
+      nr_overrides:
+        description: 'JSON of per-run NRVA overrides, e.g. {"harvest_cycle_secs":5}'
+        required: false
+        default: '{}'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: playback-master-${{ github.ref }}
+  cancel-in-progress: false   # let in-flight runs finish; queue new ones
+
+jobs:
+  discover:
+    name: discover NRVA versions + legs + scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.versions.outputs.list }}
+      legs: ${{ steps.legs.outputs.list }}
+      scenarios: ${{ steps.scenarios.outputs.list }}
+      trigger_time: ${{ steps.meta.outputs.trigger_time }}
+    steps:
+      - name: Meta
+        id: meta
+        run: |
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "trigger_time=$TS" >> "$GITHUB_OUTPUT"
+          echo "Triggered at $TS"
+
+      - name: Discover NRVA versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSIONS: ${{ inputs.versions }}
+        run: |
+          set -uo pipefail
+          if [ -n "$INPUT_VERSIONS" ]; then
+            echo "Using explicit version override: $INPUT_VERSIONS"
+            JSON=$(echo "$INPUT_VERSIONS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' \
+                   | grep -v '^$' | jq -R . | jq -sc .)
+          else
+            echo "Auto-discovering tags ≥ v3.0.0 from newrelic/video-agent-iOS"
+            # Get up to 100 latest releases, keep tags that are vX.Y.Z with X>=3.
+            TAGS=$(gh release list --repo newrelic/video-agent-iOS --limit 100 --json tagName \
+                   --jq '.[].tagName' \
+                   | grep -E '^v?[3-9][0-9]*\.[0-9]+\.[0-9]+$' \
+                   | sed 's/^v//' \
+                   | sort -V -u)
+            JSON=$(echo "$TAGS" | jq -R . | jq -sc .)
+          fi
+          echo "Versions: $JSON"
+          echo "list=$JSON" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve leg matrix
+        id: legs
+        env:
+          INPUT_LEGS: ${{ inputs.legs }}
+        run: |
+          set -uo pipefail
+          # Default 4-leg matrix. Override via comma-separated input.
+          DEFAULT='[
+            {"tag":"iOS-18-iPhone-16-Pro","device":"iPhone 16 Pro","os_version":"","platform":"iOS"},
+            {"tag":"iOS-17-iPhone-15","device":"iPhone 15","os_version":"","platform":"iOS"},
+            {"tag":"iOS-16-iPhone-14","device":"iPhone 14","os_version":"16.4","platform":"iOS"},
+            {"tag":"tvOS-18-Apple-TV-4K","device":"Apple TV 4K (3rd generation)","os_version":"","platform":"tvOS"}
+          ]'
+          if [ -n "$INPUT_LEGS" ]; then
+            REQUESTED=$(echo "$INPUT_LEGS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | jq -R . | jq -sc .)
+            JSON=$(jq -c --argjson req "$REQUESTED" '[.[] | select(.tag | IN($req[]))]' <<<"$DEFAULT")
+          else
+            JSON=$(jq -c . <<<"$DEFAULT")
+          fi
+          echo "Legs: $JSON"
+          echo "list=$JSON" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve scenarios
+        id: scenarios
+        env:
+          INPUT_SCEN: ${{ inputs.scenarios }}
+        run: |
+          set -uo pipefail
+          # Wave 1: only one wired scenario.
+          DEFAULT='content-hls-lifecycle'
+          if [ -n "$INPUT_SCEN" ]; then
+            SCEN="$INPUT_SCEN"
+          else
+            SCEN="$DEFAULT"
+          fi
+          echo "Scenarios: $SCEN"
+          echo "list=$SCEN" >> "$GITHUB_OUTPUT"
+
+  # --- Build .app per (version × platform) -------------------------------
+  build:
+    needs: discover
+    if: needs.discover.outputs.versions != '[]'
+    name: build
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.discover.outputs.versions) }}
+        platform: [iOS, tvOS]
+    uses: ./.github/workflows/playback-build.yml
+    with:
+      nrva_version: ${{ matrix.version }}
+      platform: ${{ matrix.platform }}
+
+  # --- Run scenarios per (version × leg) ---------------------------------
+  test:
+    needs: [discover, build]
+    if: needs.discover.outputs.versions != '[]'
+    name: test
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.discover.outputs.versions) }}
+        leg: ${{ fromJson(needs.discover.outputs.legs) }}
+    uses: ./.github/workflows/playback-test.yml
+    with:
+      nrva_version: ${{ matrix.version }}
+      leg_tag: ${{ matrix.leg.tag }}
+      device: ${{ matrix.leg.device }}
+      os_version: ${{ matrix.leg.os_version }}
+      platform: ${{ matrix.leg.platform }}
+      scenarios: ${{ needs.discover.outputs.scenarios }}
+      run_id: ${{ github.run_id }}
+      git_sha: ${{ github.sha }}
+      trigger_time: ${{ needs.discover.outputs.trigger_time }}
+      nr_overrides: ${{ inputs.nr_overrides || '{}' }}
+    secrets: inherit
+
+  # --- Summary (no pass/fail gate — generator, not validator) ------------
+  summary:
+    needs: [discover, build, test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write run summary
+        env:
+          VERSIONS: ${{ needs.discover.outputs.versions }}
+          LEGS: ${{ needs.discover.outputs.legs }}
+          SCENARIOS: ${{ needs.discover.outputs.scenarios }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          {
+            echo "# 🎬 NRVA telemetry generator — ${{ needs.discover.outputs.trigger_time }}"
+            echo ""
+            echo "Branch: \`${{ github.ref_name }}\` · Trigger: \`${{ github.event_name }}\` · Run: [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo ""
+            echo "**Versions:** \`$VERSIONS\`"
+            echo "**Legs:** \`$LEGS\`"
+            echo "**Scenarios:** \`$SCENARIOS\`"
+            echo ""
+            echo "| Phase | Result |"
+            echo "|---|---|"
+            echo "| build | $BUILD_RESULT |"
+            echo "| test | $TEST_RESULT |"
+            echo ""
+            echo "Events land in your New Relic UI tagged with \`nrvaVersion\`, \`legTag\`, \`runId\`, \`scenarioId\`."
+            echo "Generator workflow — no pass/fail gate by design."
+          } >> "$GITHUB_STEP_SUMMARY"

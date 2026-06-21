@@ -15,7 +15,31 @@ import Foundation
 enum ContentCatalog {
 
     static let hardcoded: [ContentItem] = [
-        // -- VOD without ads --
+        // -- Scripted scenarios (Wave 1+) --
+        // Each runs the player through a defined sequence of actions to fire
+        // every CONTENT_* event type in NRVA: PAUSE, RESUME, SEEK_START,
+        // SEEK_END, RENDITION_CHANGE, END (via seek-to-near-end).
+        ContentItem(
+            id: "content-hls-lifecycle",
+            title: "Content Lifecycle (HLS)",
+            subtitle: "Scripted: play → pause → resume → seek mid → seek end → done",
+            posterURL: nil,
+            streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            durationSecs: 600,
+            isLive: false,
+            section: .featured,
+            imaTagURL: nil,
+            actionScript: [
+                PlayerAction(t:  0, "play"),
+                PlayerAction(t:  5, "pause"),
+                PlayerAction(t:  7, "play"),
+                PlayerAction(t: 10, "seek_pct", "50"),
+                PlayerAction(t: 14, "seek_end_offset", "2"),
+                PlayerAction(t: 20, "done"),
+            ]
+        ),
+
+        // -- Passive playback scenarios (legacy, kept for local testing) --
         ContentItem(
             id: "bipbop-adv",
             title: "Apple BipBop",
@@ -24,8 +48,9 @@ enum ContentCatalog {
             streamURL: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
             durationSecs: 600,
             isLive: false,
-            section: .featured,
-            imaTagURL: nil
+            section: .vod,
+            imaTagURL: nil,
+            actionScript: nil
         ),
         ContentItem(
             id: "mux-tears-of-steel",
@@ -36,7 +61,8 @@ enum ContentCatalog {
             durationSecs: 734,
             isLive: false,
             section: .vod,
-            imaTagURL: nil
+            imaTagURL: nil,
+            actionScript: nil
         ),
         ContentItem(
             id: "big-buck-bunny",
@@ -47,7 +73,8 @@ enum ContentCatalog {
             durationSecs: 596,
             isLive: false,
             section: .vod,
-            imaTagURL: nil
+            imaTagURL: nil,
+            actionScript: nil
         ),
         ContentItem(
             id: "sintel-mp4",
@@ -58,7 +85,8 @@ enum ContentCatalog {
             durationSecs: 888,
             isLive: false,
             section: .vod,
-            imaTagURL: nil
+            imaTagURL: nil,
+            actionScript: nil
         ),
         ContentItem(
             id: "mux-discontinuity",
@@ -69,12 +97,11 @@ enum ContentCatalog {
             durationSecs: nil,
             isLive: false,
             section: .vod,
-            imaTagURL: nil
+            imaTagURL: nil,
+            actionScript: nil
         ),
 
         // -- VOD with ads (Google IMA test tags) --
-        // Public test tags from
-        // https://developers.google.com/interactive-media-ads/docs/sdks/ios/client-side/tags
         ContentItem(
             id: "ima-preroll",
             title: "IMA Pre-roll",
@@ -84,7 +111,8 @@ enum ContentCatalog {
             durationSecs: 600,
             isLive: false,
             section: .vod,
-            imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_preroll_skippable&sz=640x480&ciu_szs=300x250&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator=")
+            imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_preroll_skippable&sz=640x480&ciu_szs=300x250&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator="),
+            actionScript: nil
         ),
         ContentItem(
             id: "ima-vmap",
@@ -95,7 +123,8 @@ enum ContentCatalog {
             durationSecs: 600,
             isLive: false,
             section: .vod,
-            imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/vmap_ad_samples&sz=640x480&cust_params=sample_ar%3Dpremidpost&ciu_szs=300x250&gdfp_req=1&ad_rule=1&output=vmap&unviewed_position_start=1&env=vp&impl=s&correlator=")
+            imaTagURL: URL(string: "https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/vmap_ad_samples&sz=640x480&cust_params=sample_ar%3Dpremidpost&ciu_szs=300x250&gdfp_req=1&ad_rule=1&output=vmap&unviewed_position_start=1&env=vp&impl=s&correlator="),
+            actionScript: nil
         ),
         ContentItem(
             id: "ima-error",
@@ -106,7 +135,8 @@ enum ContentCatalog {
             durationSecs: 600,
             isLive: false,
             section: .vod,
-            imaTagURL: URL(string: "https://does-not-resolve.example.invalid/vast.xml")
+            imaTagURL: URL(string: "https://does-not-resolve.example.invalid/vast.xml"),
+            actionScript: nil
         ),
     ]
 

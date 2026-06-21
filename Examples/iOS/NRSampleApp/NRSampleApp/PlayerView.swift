@@ -47,6 +47,7 @@ final class PlayerModel: ObservableObject {
     private var startedAt: Date?
     private var contentId: String = ""
     private var nrvaTrackerId: Int = -1
+    private var actionScriptTask: Task<Void, Never>?
 
     func start(item: ContentItem) {
         contentId = item.id
@@ -125,13 +126,29 @@ final class PlayerModel: ObservableObject {
             }
         }
 
-        player.play()
+        // If the scenario has a scripted action sequence (or one was passed
+        // via --action-script CLI arg), run it. Otherwise default behavior:
+        // immediate play, no further actions (passive playback).
+        if let script = PlayerActionScript.resolve(for: item) {
+            AppLog.shared.log(.event, "Scenario", "starting actionScript",
+                              ["id": item.id, "steps": script.count])
+            actionScriptTask = PlayerActionScript.run(script,
+                                                     on: player,
+                                                     scenarioId: item.id)
+        } else {
+            player.play()
+        }
     }
 
     func stop() {
         let durationMs = Int(Date().timeIntervalSince(startedAt ?? Date()) * 1000)
         AppLog.shared.log(.event, "Player", "stop",
                           ["id": contentId, "session_ms": durationMs])
+
+        // Cancel any in-flight scripted actions so late dispatches don't fire
+        // against a torn-down player.
+        actionScriptTask?.cancel()
+        actionScriptTask = nil
 
         // Level 2: release the per-player NRVA tracker.
         if nrvaTrackerId >= 0 {

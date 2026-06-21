@@ -1,0 +1,274 @@
+name: playback-test
+
+# Reusable child workflow: download a pre-built NRSampleApp.app,
+# boot a simulator, run scripted scenarios sequentially, capture per-scenario
+# logs + simulator console, upload artifacts.
+#
+# Called by playback-master.yml — once per (nrva_version, leg).
+# Depends on the upstream build artifact `app-<nrva_version>-<platform>`.
+
+on:
+  workflow_call:
+    inputs:
+      nrva_version:
+        description: 'NewRelicVideoAgent version under test'
+        required: true
+        type: string
+      leg_tag:
+        description: 'Human-readable leg id, e.g. iOS-18-iPhone-16-Pro'
+        required: true
+        type: string
+      device:
+        description: 'simctl device name, e.g. "iPhone 16 Pro"'
+        required: true
+        type: string
+      os_version:
+        description: 'iOS/tvOS version (empty = use whatever the device has preinstalled)'
+        required: false
+        type: string
+        default: ''
+      platform:
+        description: 'iOS | tvOS'
+        required: true
+        type: string
+      scenarios:
+        description: 'Comma-separated scenario ids to run'
+        required: true
+        type: string
+      run_id:
+        description: 'github.run_id of the master run — tagged on every NRVA event'
+        required: true
+        type: string
+      git_sha:
+        description: 'commit under test — tagged on every NRVA event'
+        required: true
+        type: string
+      trigger_time:
+        description: 'ISO-8601 of master fan-out start — tagged on every NRVA event'
+        required: true
+        type: string
+      nr_overrides:
+        description: 'JSON of per-run NRVA overrides (e.g. {"harvest_cycle_secs":5})'
+        required: false
+        type: string
+        default: '{}'
+
+    secrets:
+      NEW_RELIC_APP_TOKEN:
+        required: false   # missing → NRVA disables itself (no telemetry)
+      NEW_RELIC_COLLECTOR_ADDRESS:
+        required: false
+
+env:
+  ARTIFACTS_DIR: ${{ github.workspace }}/playback-artifacts
+
+jobs:
+  test:
+    name: test-${{ inputs.leg_tag }}-${{ inputs.nrva_version }}
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode latest-stable
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      - name: Install jq
+        run: brew install jq
+
+      - name: Show preinstalled simulator runtimes
+        run: xcrun simctl list runtimes
+
+      - name: Download iOS runtime ${{ inputs.os_version }}
+        if: inputs.os_version != ''
+        run: |
+          set -euxo pipefail
+          PLATFORM_FLAG="${{ inputs.platform }}"
+          sudo xcodebuild -downloadPlatform "$PLATFORM_FLAG" -buildVersion "${{ inputs.os_version }}" \
+            || xcodebuild -downloadPlatform "$PLATFORM_FLAG" -buildVersion "${{ inputs.os_version }}"
+
+      - name: Boot simulator
+        id: boot
+        env:
+          DEVICE_NAME: ${{ inputs.device }}
+          OS_VERSION: ${{ inputs.os_version }}
+          LEG_TAG: ${{ inputs.leg_tag }}
+        run: |
+          set -euxo pipefail
+          if [ -n "$OS_VERSION" ]; then
+            RUNTIME_ID="${{ inputs.platform }}-${OS_VERSION//./-}"
+            xcrun simctl create "auto-${LEG_TAG}" "$DEVICE_NAME" "$RUNTIME_ID" \
+              || echo "(device may already exist — continuing)"
+            DEVICE_NAME="auto-${LEG_TAG}"
+          fi
+          xcrun simctl boot "$DEVICE_NAME" || echo "(already booted)"
+          xcrun simctl bootstatus "$DEVICE_NAME" -b
+          DEVICE_ID=$(xcrun simctl list devices booted | awk -F '[()]' '/Booted/{print $2; exit}')
+          echo "device_id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
+          echo "device_name=$DEVICE_NAME" >> "$GITHUB_OUTPUT"
+          echo "Booted: $DEVICE_NAME ($DEVICE_ID)"
+
+      - name: Download pre-built app
+        uses: actions/download-artifact@v4
+        with:
+          name: app-${{ inputs.nrva_version }}-${{ inputs.platform }}
+          path: app/
+
+      - name: Install app on simulator
+        id: install
+        env:
+          DEVICE_ID: ${{ steps.boot.outputs.device_id }}
+        run: |
+          set -euxo pipefail
+          tar -xf app/NRSampleApp.app.tar -C app/
+          APP_DIR=$(find app -maxdepth 2 -name '*.app' -type d | head -1)
+          xcrun simctl install "$DEVICE_ID" "$APP_DIR"
+          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$APP_DIR/Info.plist")
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+          echo "Installed: $BUNDLE_ID from $APP_DIR"
+
+      - name: Inject NRVA env into simulator
+        env:
+          DEVICE_ID: ${{ steps.boot.outputs.device_id }}
+          NEW_RELIC_APP_TOKEN: ${{ secrets.NEW_RELIC_APP_TOKEN }}
+          NEW_RELIC_COLLECTOR_ADDRESS: ${{ secrets.NEW_RELIC_COLLECTOR_ADDRESS }}
+          NRVA_VERSION: ${{ inputs.nrva_version }}
+          LEG_TAG: ${{ inputs.leg_tag }}
+          RUN_ID: ${{ inputs.run_id }}
+          GIT_SHA: ${{ inputs.git_sha }}
+          TRIGGER_TIME: ${{ inputs.trigger_time }}
+          NR_OVERRIDES_JSON: ${{ inputs.nr_overrides }}
+        run: |
+          set -uo pipefail
+          # Sensitive — never echo. State only.
+          if [ -n "${NEW_RELIC_APP_TOKEN:-}" ]; then
+            xcrun simctl spawn "$DEVICE_ID" launchctl setenv NEW_RELIC_APP_TOKEN "$NEW_RELIC_APP_TOKEN"
+            echo "  appToken: (set)"
+          else
+            echo "  appToken: (not set — NRVA will disable itself)"
+          fi
+          if [ -n "${NEW_RELIC_COLLECTOR_ADDRESS:-}" ]; then
+            xcrun simctl spawn "$DEVICE_ID" launchctl setenv NEW_RELIC_COLLECTOR_ADDRESS "$NEW_RELIC_COLLECTOR_ADDRESS"
+            echo "  collector: (custom-set)"
+          else
+            echo "  collector: (default)"
+          fi
+          # Attribution — these tag every NRVA event for filtering in NR UI.
+          xcrun simctl spawn "$DEVICE_ID" launchctl setenv NRVA_VERSION  "$NRVA_VERSION"
+          xcrun simctl spawn "$DEVICE_ID" launchctl setenv LEG_TAG       "$LEG_TAG"
+          xcrun simctl spawn "$DEVICE_ID" launchctl setenv RUN_ID        "$RUN_ID"
+          xcrun simctl spawn "$DEVICE_ID" launchctl setenv GIT_SHA       "$GIT_SHA"
+          xcrun simctl spawn "$DEVICE_ID" launchctl setenv TRIGGER_TIME  "$TRIGGER_TIME"
+          # Parse per-run NRVA overrides (JSON object) and setenv each key.
+          if [ -n "$NR_OVERRIDES_JSON" ] && [ "$NR_OVERRIDES_JSON" != '{}' ]; then
+            echo "  applying nr_overrides:"
+            echo "$NR_OVERRIDES_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r k v; do
+              ENV_KEY="NEW_RELIC_$(echo "$k" | tr '[:lower:]' '[:upper:]')"
+              xcrun simctl spawn "$DEVICE_ID" launchctl setenv "$ENV_KEY" "$v"
+              echo "    $ENV_KEY=$v"
+            done
+          fi
+
+      - name: Run scenarios sequentially
+        env:
+          DEVICE_ID: ${{ steps.boot.outputs.device_id }}
+          BUNDLE_ID: ${{ steps.install.outputs.bundle_id }}
+          SCENARIOS: ${{ inputs.scenarios }}
+          LEG_TAG: ${{ inputs.leg_tag }}
+          NRVA_VERSION: ${{ inputs.nrva_version }}
+        run: |
+          set -uo pipefail
+          mkdir -p "$ARTIFACTS_DIR"
+
+          SUMMARY="$ARTIFACTS_DIR/SUMMARY.txt"
+          {
+            echo "Leg:        $LEG_TAG"
+            echo "NRVA:       $NRVA_VERSION"
+            echo "Run:        ${{ inputs.run_id }}"
+            echo "Trigger:    ${{ inputs.trigger_time }}"
+            echo "Scenarios:  $SCENARIOS"
+            echo ""
+            printf "%-30s %-10s %-10s %-25s\n" "id" "result" "elapsed" "viewId"
+            echo "----------------------------------------------------------------------"
+          } > "$SUMMARY"
+
+          IFS=',' read -ra SCEN_LIST <<< "$SCENARIOS"
+          for sid in "${SCEN_LIST[@]}"; do
+            sid=$(echo "$sid" | tr -d ' ')
+            [ -z "$sid" ] && continue
+            echo "===== scenario: $sid ====="
+            SCEN_DIR="$ARTIFACTS_DIR/$sid"
+            mkdir -p "$SCEN_DIR"
+            LOG_FILE="$SCEN_DIR/auto-play-$sid.log"
+            CONSOLE_LOG="$SCEN_DIR/simulator-console.log"
+            SYSLOG="$SCEN_DIR/syslog.log"
+
+            # Tag scenario id into NRVA env so the app sets it as global attr.
+            xcrun simctl spawn "$DEVICE_ID" launchctl setenv SCENARIO_ID "$sid"
+
+            # Begin unified-log capture in background (verbose, scoped to app).
+            xcrun simctl spawn "$DEVICE_ID" log stream --level=debug \
+              --predicate "subsystem CONTAINS 'NRSampleApp' OR subsystem CONTAINS 'NewRelicVideo'" \
+              > "$SYSLOG" 2>&1 &
+            LOG_PID=$!
+
+            START=$(date +%s)
+            # Launch app with auto-play arg. --console captures stdout/stderr.
+            xcrun simctl launch --console-pty "$DEVICE_ID" "$BUNDLE_ID" \
+              --auto-play "$sid" \
+              > "$CONSOLE_LOG" 2>&1 &
+            LAUNCH_PID=$!
+
+            # Poll for SCENARIO_DONE sentinel in the per-scenario in-app log,
+            # which the runner reads from the simulator's app sandbox.
+            APP_LOG_DIR=$(xcrun simctl get_app_container "$DEVICE_ID" "$BUNDLE_ID" data)/Documents/logs
+            DONE=0
+            for i in $(seq 1 60); do
+              sleep 1
+              if [ -f "$APP_LOG_DIR/auto-play-$sid.log" ] && \
+                 grep -q "SCENARIO_DONE" "$APP_LOG_DIR/auto-play-$sid.log" 2>/dev/null; then
+                DONE=1
+                break
+              fi
+            done
+            ELAPSED=$(($(date +%s) - START))
+
+            # Copy app's in-sandbox log to artifacts.
+            if [ -f "$APP_LOG_DIR/auto-play-$sid.log" ]; then
+              cp "$APP_LOG_DIR/auto-play-$sid.log" "$LOG_FILE"
+            fi
+
+            # Stop unified-log capture, terminate app for next scenario.
+            kill "$LOG_PID" 2>/dev/null || true
+            xcrun simctl terminate "$DEVICE_ID" "$BUNDLE_ID" || true
+            wait "$LAUNCH_PID" 2>/dev/null || true
+
+            # Screenshot for forensics.
+            xcrun simctl io "$DEVICE_ID" screenshot "$SCEN_DIR/screenshot.png" 2>/dev/null || true
+
+            # Pull viewId for cross-reference with NR UI.
+            VIEW_ID="(not-found)"
+            if [ -f "$LOG_FILE" ]; then
+              VIEW_ID=$(grep -oE 'viewId=[A-Za-z0-9-]+' "$LOG_FILE" | head -1 | cut -d= -f2)
+              [ -z "$VIEW_ID" ] && VIEW_ID="(not-found)"
+            fi
+
+            RESULT=$([ "$DONE" = "1" ] && echo "ok" || echo "timeout")
+            printf "%-30s %-10s %-10s %-25s\n" "$sid" "$RESULT" "${ELAPSED}s" "$VIEW_ID" >> "$SUMMARY"
+            echo "  $sid → $RESULT (${ELAPSED}s, viewId=$VIEW_ID)"
+          done
+
+          echo "" >> "$SUMMARY"
+          echo "===== SUMMARY =====" >> "$SUMMARY"
+          cat "$SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playback-${{ inputs.nrva_version }}-${{ inputs.leg_tag }}-${{ inputs.run_id }}
+          path: ${{ env.ARTIFACTS_DIR }}/
+          retention-days: 14

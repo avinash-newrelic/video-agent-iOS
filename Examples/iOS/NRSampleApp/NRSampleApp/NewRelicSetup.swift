@@ -77,6 +77,24 @@ enum NewRelicSetup {
             "environment",
             value: collectorAddress() != nil ? "staging" : "production"
         )
+
+        // CI attribution — these let you filter / facet in NR UI by which
+        // workflow run, which NRVA pod version, and which OS leg an event
+        // came from. Values forwarded into the simulator via `simctl setenv`
+        // by the GitHub Actions workflow.
+        for (key, envVar) in [
+            ("nrvaVersion",  "NRVA_VERSION"),     // pod version pinned in this build
+            ("legTag",       "LEG_TAG"),          // e.g. iOS-18-iPhone-16-Pro
+            ("runId",        "RUN_ID"),           // github.run_id
+            ("gitSha",       "GIT_SHA"),          // commit under test
+            ("scenarioId",   "SCENARIO_ID"),      // which scripted scenario
+            ("triggerTime",  "TRIGGER_TIME"),     // ISO-8601 of master fan-out start
+        ] {
+            if let v = nonEmpty(envVar) {
+                NRVAVideo.setGlobalAttribute(key, value: v)
+            }
+        }
+
         NRVAVideo.setUserId(stableUserId())
     }
 

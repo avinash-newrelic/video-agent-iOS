@@ -1,0 +1,120 @@
+name: playback-build
+
+# Reusable child workflow: build NRSampleApp pinned to a specific
+# NewRelicVideoAgent pod version, package the .app as an artifact
+# for downstream test legs to install on simulators.
+#
+# Called by playback-master.yml — once per (nrva_version, platform).
+# Output: artifact named `app-<nrva_version>-<platform>` containing
+# NRSampleApp.app.tar (uncompressed, contents preserved).
+
+on:
+  workflow_call:
+    inputs:
+      nrva_version:
+        description: 'NewRelicVideoAgent version (e.g. "4.2.0" or "v4.2.0")'
+        required: true
+        type: string
+      platform:
+        description: 'iOS | tvOS'
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: build-${{ inputs.platform }}-${{ inputs.nrva_version }}
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode latest-stable (macos-14 defaults to 15.4 which
+              can't open format-77 project files from current XcodeGen)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      - name: Show Xcode + ruby + cocoapods versions
+        run: |
+          xcodebuild -version
+          ruby --version
+          pod --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Pin Podfile to NRVA version
+        working-directory: Examples/iOS/NRSampleApp
+        env:
+          NRVA_VERSION: ${{ inputs.nrva_version }}
+        run: |
+          set -euo pipefail
+          # Normalize: strip leading 'v' if release tag uses it.
+          VER="${NRVA_VERSION#v}"
+          echo "Pinning Podfile to NewRelicVideoAgent ${VER} from github tag"
+
+          # Replace each :path =>  '../../../' line with :git/:tag pointing
+          # at the public repo. Other pod options preserved.
+          sed -i.bak -E \
+            "s|pod 'NewRelicVideoAgent',[[:space:]]*:path[[:space:]]*=>[[:space:]]*LOCAL_AGENT_PATH|pod 'NewRelicVideoAgent', :git => 'https://github.com/newrelic/video-agent-iOS.git', :tag => 'v${VER}'|" \
+            Podfile
+          sed -i.bak -E \
+            "s|pod 'NRAVPlayerTracker',[[:space:]]*:path[[:space:]]*=>[[:space:]]*LOCAL_AGENT_PATH|pod 'NRAVPlayerTracker', :git => 'https://github.com/newrelic/video-agent-iOS.git', :tag => 'v${VER}'|" \
+            Podfile
+          sed -i.bak -E \
+            "s|pod 'NRIMATracker',[[:space:]]*:path[[:space:]]*=>[[:space:]]*LOCAL_AGENT_PATH|pod 'NRIMATracker', :git => 'https://github.com/newrelic/video-agent-iOS.git', :tag => 'v${VER}'|" \
+            Podfile
+
+          echo "----- Pinned Podfile -----"
+          cat Podfile
+          echo "--------------------------"
+
+      - name: Generate Xcode project (xcodegen)
+        working-directory: Examples/iOS/NRSampleApp
+        run: xcodegen generate
+
+      - name: Pod install
+        working-directory: Examples/iOS/NRSampleApp
+        run: pod install --repo-update
+
+      - name: Build .app
+        working-directory: Examples/iOS/NRSampleApp
+        env:
+          SCHEME: NRSampleApp_${{ inputs.platform }}
+          DESTINATION: >-
+            ${{ inputs.platform == 'tvOS'
+                && 'generic/platform=tvOS Simulator'
+                || 'generic/platform=iOS Simulator' }}
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -workspace NRSampleApp.xcworkspace \
+            -scheme "$SCHEME" \
+            -destination "$DESTINATION" \
+            -configuration Debug \
+            -derivedDataPath build \
+            build
+
+      - name: Locate + package .app
+        working-directory: Examples/iOS/NRSampleApp
+        env:
+          SCHEME: NRSampleApp_${{ inputs.platform }}
+        run: |
+          set -euxo pipefail
+          APP_PATH=$(find build/Build/Products -name '*.app' -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app produced under build/Build/Products"
+            find build/Build/Products -maxdepth 2 || true
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+          mkdir -p artifacts
+          tar -cf "artifacts/NRSampleApp.app.tar" -C "$(dirname "$APP_PATH")" "$(basename "$APP_PATH")"
+          ls -lh artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ inputs.nrva_version }}-${{ inputs.platform }}
+          path: Examples/iOS/NRSampleApp/artifacts/NRSampleApp.app.tar
+          retention-days: 7
