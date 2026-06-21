@@ -66,8 +66,9 @@ env:
   ARTIFACTS_DIR: ${{ github.workspace }}/playback-artifacts
 
 jobs:
+  # Job-name kept short ("test") — the caller's matrix job display
+  # already carries `v<version> · <leg.tag>` context.
   test:
-    name: test-${{ inputs.leg_tag }}-${{ inputs.nrva_version }}
     runs-on: macos-14
     timeout-minutes: 60
 

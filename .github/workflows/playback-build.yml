@@ -21,8 +21,9 @@ on:
         type: string
 
 jobs:
+  # Job-name kept short ("build") — the caller's matrix job display
+  # already carries `v<version> · <platform>` context.
   build:
-    name: build-${{ inputs.platform }}-${{ inputs.nrva_version }}
     runs-on: macos-14
     timeout-minutes: 30
 

@@ -129,11 +129,16 @@ jobs:
         run: |
           set -uo pipefail
           # Default 4-leg matrix. Override via comma-separated input.
+          # `tag` is the stable identifier — used in workflow inputs,
+          # artifact names, and as an NRVA global attribute on every
+          # event. Don't change these casually; you'll fragment NR UI
+          # history. `display` is the human-friendly form used in the
+          # Actions UI and run summary.
           DEFAULT='[
-            {"tag":"iOS-18-iPhone-16-Pro","device":"iPhone 16 Pro","os_version":"","platform":"iOS"},
-            {"tag":"iOS-17-iPhone-15","device":"iPhone 15","os_version":"","platform":"iOS"},
-            {"tag":"iOS-16-iPhone-14","device":"iPhone 14","os_version":"16.4","platform":"iOS"},
-            {"tag":"tvOS-18-Apple-TV-4K","device":"Apple TV 4K (3rd generation)","os_version":"","platform":"tvOS"}
+            {"tag":"iOS-18-iPhone-16-Pro","display":"iOS 18 · iPhone 16 Pro","device":"iPhone 16 Pro","os_version":"","platform":"iOS"},
+            {"tag":"iOS-17-iPhone-15","display":"iOS 17 · iPhone 15","device":"iPhone 15","os_version":"","platform":"iOS"},
+            {"tag":"iOS-16-iPhone-14","display":"iOS 16 · iPhone 14","device":"iPhone 14","os_version":"16.4","platform":"iOS"},
+            {"tag":"tvOS-18-Apple-TV-4K","display":"tvOS 18 · Apple TV 4K","device":"Apple TV 4K (3rd generation)","os_version":"","platform":"tvOS"}
           ]'
           if [ -n "$INPUT_LEGS" ]; then
             REQUESTED=$(echo "$INPUT_LEGS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | jq -R . | jq -sc .)
@@ -167,7 +172,11 @@ jobs:
   build:
     needs: discover
     if: needs.discover.outputs.versions != '[]'
-    name: build
+    # Explicit short name — otherwise GitHub auto-expands every matrix
+    # field into the title (e.g. "build (4.2.0, tvOS)"), and combined
+    # with the inner reusable workflow's job name produces a long
+    # parenthesized blob in the Actions UI.
+    name: build · v${{ matrix.version }} · ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:
@@ -182,7 +191,8 @@ jobs:
   test:
     needs: [discover, build]
     if: needs.discover.outputs.versions != '[]'
-    name: test
+    # Use the human-friendly `display` field, not the kebab-case `tag`.
+    name: test · v${{ matrix.version }} · ${{ matrix.leg.display }}
     strategy:
       fail-fast: false
       matrix:
@@ -208,30 +218,171 @@ jobs:
     needs: [discover, build, test]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Write run summary
+      - name: Download all leg artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          pattern: 'playback-*'
+        continue-on-error: true   # missing artifacts are non-fatal here
+
+      - name: Build per-(version × leg) summary matrix
         env:
           VERSIONS: ${{ needs.discover.outputs.versions }}
           LEGS: ${{ needs.discover.outputs.legs }}
           SCENARIOS: ${{ needs.discover.outputs.scenarios }}
           BUILD_RESULT: ${{ needs.build.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          TRIGGER_TIME: ${{ needs.discover.outputs.trigger_time }}
+        # No `set -e` — generator workflow, must always emit a summary
+        # even if some artifacts are missing or malformed.
         run: |
+          set -x
+
+          # ---- Header ----
           {
-            echo "# 🎬 NRVA telemetry generator — ${{ needs.discover.outputs.trigger_time }}"
+            echo "# 🎬 NRVA telemetry generator — ${TRIGGER_TIME}"
             echo ""
             echo "Branch: \`${{ github.ref_name }}\` · Trigger: \`${{ github.event_name }}\` · Run: [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
             echo ""
-            echo "**Versions:** \`$VERSIONS\`"
-            echo "**Legs:** \`$LEGS\`"
-            echo "**Scenarios:** \`$SCENARIOS\`"
+            echo "**Scenarios:** \`${SCENARIOS}\`"
             echo ""
-            echo "| Phase | Result |"
-            echo "|---|---|"
-            echo "| build | $BUILD_RESULT |"
-            echo "| test | $TEST_RESULT |"
+            echo "**Phase outcomes:** build = \`${BUILD_RESULT}\` · test = \`${TEST_RESULT}\`"
             echo ""
-            echo "Events land in your New Relic UI tagged with \`nrvaVersion\`, \`legTag\`, \`runId\`, \`scenarioId\`."
-            echo "Generator workflow — no pass/fail gate by design."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ---- Parse versions + legs (JSON arrays) ----
+          VERS_LIST=$(echo "$VERSIONS" | jq -r '.[]' 2>/dev/null || true)
+          # Pair each leg's stable tag (used for artifact filename) with its
+          # human-friendly display (used in the column header). Newline-
+          # separated `tag<TAB>display` is robust to spaces in display.
+          LEG_PAIRS=$(echo "$LEGS" | jq -r '.[] | "\(.tag)\t\(.display // .tag)"' 2>/dev/null || true)
+
+          if [ -z "$VERS_LIST" ] || [ -z "$LEG_PAIRS" ]; then
+            echo "_(no version/leg info — discover step did not populate)_" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # ---- Build markdown table: rows = versions, columns = legs ----
+          HEADER="| Version |"
+          SEP="|---|"
+          while IFS=$'\t' read -r _tag display; do
+            HEADER="$HEADER ${display} |"
+            SEP="$SEP---|"
+          done <<< "$LEG_PAIRS"
+          {
+            echo "## Per (version × leg) results"
+            echo ""
+            echo "Each cell: scenarios \`ok / total\` (✅ all ok · ⚠️ partial · ❌ missing/empty)"
+            echo ""
+            echo "$HEADER"
+            echo "$SEP"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Totals across the matrix
+          TOTAL_OK=0
+          TOTAL_FAIL=0
+          TOTAL_LEGS=0
+
+          for v in $VERS_LIST; do
+            ROW="| \`$v\` |"
+            while IFS=$'\t' read -r leg _display; do
+              SUM="artifacts/playback-${v}-${leg}-${{ github.run_id }}/SUMMARY.txt"
+              if [ ! -f "$SUM" ]; then
+                ROW="$ROW ❌ — |"
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
+                TOTAL_LEGS=$((TOTAL_LEGS + 1))
+                continue
+              fi
+              # Count scenario rows: lines in the table body have "ok" or "timeout"
+              # as the 2nd column. Use awk to count by the table-bounded shape
+              # (skip header lines / blank lines / final SUMMARY marker).
+              OK=$(awk '$2=="ok" {c++} END{print c+0}'      "$SUM" 2>/dev/null || echo 0)
+              TO=$(awk '$2=="timeout" {c++} END{print c+0}' "$SUM" 2>/dev/null || echo 0)
+              TOT=$((OK + TO))
+
+              if [ "$TOT" -eq 0 ]; then
+                CELL="❌ 0/0"
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
+              elif [ "$TO" -eq 0 ]; then
+                CELL="✅ ${OK}/${TOT}"
+                TOTAL_OK=$((TOTAL_OK + 1))
+              else
+                CELL="⚠️ ${OK}/${TOT}"
+                TOTAL_OK=$((TOTAL_OK + 1))
+              fi
+              ROW="$ROW $CELL |"
+              TOTAL_LEGS=$((TOTAL_LEGS + 1))
+            done <<< "$LEG_PAIRS"
+            echo "$ROW" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          # ---- Aggregate ----
+          {
+            echo ""
+            if [ "$TOTAL_FAIL" -eq 0 ] && [ "$TOTAL_LEGS" -gt 0 ]; then
+              echo "## ✅ All ${TOTAL_LEGS} legs produced telemetry"
+            elif [ "$TOTAL_LEGS" -eq 0 ]; then
+              echo "## ⚠️ No leg artifacts found"
+            else
+              echo "## ${TOTAL_OK} / ${TOTAL_LEGS} legs produced telemetry · ${TOTAL_FAIL} missing or empty"
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ---- Per (version × leg) NRVA viewIds ----
+          # Each scenario gets its own NRVA viewId. Click a collapsible to
+          # see the per-scenario mapping for that leg. Lets you go from
+          # this summary directly to an NR UI event row via WHERE viewId = ...
+          {
+            echo "## Sessions (NRVA viewIds)"
+            echo ""
+            echo "Click a leg to expand its scenario → viewId mapping."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for v in $VERS_LIST; do
+            while IFS=$'\t' read -r leg display; do
+              SUM="artifacts/playback-${v}-${leg}-${{ github.run_id }}/SUMMARY.txt"
+              [ -f "$SUM" ] || continue
+
+              # SUMMARY.txt body rows look like:
+              #   <scenarioId>   ok|timeout   <elapsed>s   <viewId>
+              # Pull rows where $2 is ok/timeout AND a viewId-shaped $4 is present.
+              ROWS=$(awk '
+                $2=="ok" || $2=="timeout" {
+                  if (NF >= 4 && $4 != "(not-found)") {
+                    printf "| %s | `%s` | %s |\n", $1, $4, $2
+                  } else if (NF >= 4) {
+                    printf "| %s | _(not captured)_ | %s |\n", $1, $2
+                  }
+                }
+              ' "$SUM")
+
+              [ -z "$ROWS" ] && continue
+
+              {
+                echo "<details>"
+                echo "<summary><code>v${v}</code> · ${display}</summary>"
+                echo ""
+                echo "| Scenario | viewId | Result |"
+                echo "|---|---|---|"
+                echo "$ROWS"
+                echo ""
+                echo "</details>"
+                echo ""
+              } >> "$GITHUB_STEP_SUMMARY"
+            done <<< "$LEG_PAIRS"
+          done
+
+          # ---- NR UI query ----
+          {
+            echo "### Find this run in New Relic"
+            echo "All events from this run carry \`runId = '${{ github.run_id }}'\`."
+            echo ""
+            echo '```sql'
+            echo "SELECT count(*) FROM Mobile_Video WHERE runId = '${{ github.run_id }}'"
+            echo "FACET nrvaVersion, legTag, eventName SINCE 1 day ago"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
